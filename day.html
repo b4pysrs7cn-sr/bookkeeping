@@ -812,7 +812,6 @@
   const dayView = document.getElementById('dayView');
   const monthView = document.getElementById('monthView');
   const calTrack = document.getElementById('calTrack');
-  const calendarWrap = document.getElementById('calendarWrap');
 
   function showDay() {
     renderDay();
@@ -1187,19 +1186,30 @@
     return parseFloat(m[1].split(',')[4]) || 0;
   }
 
-  let monthDrag = null;      // { startX, startY, locked, originX, x, w }
+  let monthDrag = null;      // { startX, startY, locked, originX, x, w, samples }
   let cancelSettle = null;   // 落定动画被新手势打断时的清理函数
+  let suppressClick = false; // 滑动手势结束后抑制一次 click（防误触日期格进入日视图）
 
-  calendarWrap.addEventListener('touchstart', e => {
-    monthDrag = { startX: e.touches[0].clientX, startY: e.touches[0].clientY, locked: false };
+  // 手势挂在整个月视图上：顶部标题/汇总栏也可划动切换，全页跟手
+  monthView.addEventListener('touchstart', e => {
+    suppressClick = false;
+    monthDrag = {
+      startX: e.touches[0].clientX,
+      startY: e.touches[0].clientY,
+      locked: false,
+      originX: 0, x: 0, w: 0,
+      samples: []   // 速度采样：[{ x, t }]，仅保留最近 100ms
+    };
   }, { passive: true });
 
-  calendarWrap.addEventListener('touchmove', e => {
+  monthView.addEventListener('touchmove', e => {
     if (!monthDrag) return;
-    const dx = e.touches[0].clientX - monthDrag.startX;
+    const cx = e.touches[0].clientX;
+    const dx = cx - monthDrag.startX;
     const dy = e.touches[0].clientY - monthDrag.startY;
     if (!monthDrag.locked) {
-      if (Math.abs(dx) < 12 || Math.abs(dx) <= Math.abs(dy)) return;   // 横向意图判定
+      // 横向意图判定：6px 即锁定（快速跟手），横向占优
+      if (Math.abs(dx) < 6 || Math.abs(dx) <= Math.abs(dy)) return;
       monthDrag.locked = true;
       // 打断进行中的落定动画：先读当前动画位置，再冻结（连续翻页不断触）
       const frozen = trackCurrentX();
@@ -1207,7 +1217,13 @@
       calTrack.classList.add('dragging');
       calTrack.style.transform = `translateX(${frozen}px)`;
       monthDrag.originX = frozen;
+    } else if (e.cancelable) {
+      e.preventDefault();   // 锁定横向后阻止垂直滚动漂移，纯横向跟手
     }
+    // 速度采样：只保留最近 100ms，用于松手时的轻扫判定
+    const now = performance.now();
+    monthDrag.samples.push({ x: cx, t: now });
+    while (monthDrag.samples.length > 1 && now - monthDrag.samples[0].t > 100) monthDrag.samples.shift();
     // 滑轨自身宽度做位移基准：滑出量恰好等于一页日历宽（各月固定 42 格，等价无差异）
     const w = calTrack.offsetWidth || 320;
     monthDrag.w = w;
@@ -1217,27 +1233,36 @@
     else if (x < -w) x = -w + (x + w) * 0.3;
     monthDrag.x = x;
     calTrack.style.transform = `translateX(${x}px)`;
-  }, { passive: true });
+  }, { passive: false });
 
-  // 松手/手势被打断：按落点就近落定（过半切换，否则弹回）
+  // 松手/手势被打断：位置过半或快速轻扫（速度方向与位置一致）即切换，否则弹回
   function releaseTrack() {
     if (!monthDrag) return;
     if (monthDrag.locked) {
       const x = monthDrag.x || 0;
       const w = monthDrag.w || calTrack.offsetWidth || 320;
+      // 轻扫速度：最近 100ms 采样的平均横向速度
+      let vx = 0;
+      const s = monthDrag.samples;
+      if (s.length > 1) {
+        const dt = s[s.length - 1].t - s[0].t;
+        if (dt > 0) vx = (s[s.length - 1].x - s[0].x) / dt * 1000;
+      }
+      const fling = Math.abs(x) > 24 && Math.abs(vx) > 250;   // 快扫判定（位移与速度同向时才生效）
       calTrack.classList.remove('dragging');
-      if (x <= -w / 2) {
-        switchMonth(1);    // 左划过半 → 下个月
-      } else if (x >= w / 2) {
-        switchMonth(-1);   // 右划过半 → 上个月
+      if (x <= -w / 2 || (fling && x < 0 && vx < 0)) {
+        switchMonth(1);    // 左划过半 / 快速左扫 → 下个月
+      } else if (x >= w / 2 || (fling && x > 0 && vx > 0)) {
+        switchMonth(-1);   // 右划过半 / 快速右扫 → 上个月
       } else {
         calTrack.style.transform = 'translateX(0)';   // 弹回本月
       }
+      suppressClick = true;   // 本次滑动手势结束，吞掉紧随的 click
     }
     monthDrag = null;
   }
-  calendarWrap.addEventListener('touchend', releaseTrack, { passive: true });
-  calendarWrap.addEventListener('touchcancel', releaseTrack, { passive: true });
+  monthView.addEventListener('touchend', releaseTrack, { passive: true });
+  monthView.addEventListener('touchcancel', releaseTrack, { passive: true });
 
   // ===== 月份切换：滑入相邻页后增量换页 =====
   let monthSwitching = false;   // 按钮连点防抖
@@ -1443,6 +1468,7 @@
   document.getElementById('nextMonth').addEventListener('click', () => switchMonth(1));
   // 点击日历格进入日视图（事件委托挂在滑轨上，覆盖三层页面）
   calTrack.addEventListener('click', e => {
+    if (suppressClick) { suppressClick = false; return; }   // 刚结束滑动手势，吞掉误触
     const cell = e.target.closest('.cal-cell[data-date]');
     if (!cell) return;
     curDate = cell.dataset.date;
