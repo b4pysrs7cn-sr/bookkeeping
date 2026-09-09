@@ -367,10 +367,12 @@
     transition: opacity 0.35s cubic-bezier(0.32, 0.72, 0, 1),
                 transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
   }
-  .bill.expanded .bill-actions {
+  .bill.expanded .bill-actions,
+  .bill.swiping .bill-actions {
     opacity: 1;
     transform: translateX(0);
   }
+  .bill.swiping .bill-actions { transition: none; }   /* 拖拽中关闭过渡，跟手无延迟 */
   .bill-actions button {
     width: 84px;
     height: 100%;
@@ -1087,7 +1089,8 @@
       // 水平意图判定：横向位移大于纵向且超过 10px 才进入拖拽，避免干扰滚动
       if (Math.abs(dx) < 10 || Math.abs(dx) <= Math.abs(dy)) return;
       swipe.locked = true;
-      swipe.card.classList.remove('expanded');   // 转为内联拖拽控制
+      swipe.card.classList.add('swiping');        // 拖拽中显示按钮（.swiping 类）
+      swipe.card.classList.remove('expanded');    // 转为内联拖拽控制
       setMainX(swipe.main, swipe.startOpen, false);
     }
     // 起点含已展开偏移；橡皮筋阻尼：超过展开宽度后按 30% 跟随
@@ -1102,6 +1105,7 @@
     if (!swipe) return;
     const { card, main, locked, base } = swipe;
     if (locked) {
+      card.classList.remove('swiping');           // 清除拖拽态，交还给 .expanded 决定最终显隐
       // 过半吸附展开，否则弹回；同时淡入/淡出操作按钮
       if (base < -SWIPE_THRESHOLD) card.classList.add('expanded');
       else card.classList.remove('expanded');
@@ -1109,7 +1113,14 @@
     }
     swipe = null;
   }, { passive: true });
-  listEl.addEventListener('touchcancel', () => { swipe = null; }, { passive: true });
+  listEl.addEventListener('touchcancel', () => {
+    if (swipe && swipe.locked) {
+      swipe.card.classList.remove('swiping');
+      swipe.card.classList.remove('expanded');
+      setMainX(swipe.main, null, true);
+    }
+    swipe = null;
+  }, { passive: true });
 
   // ===== 日视图右划返回月视图（iOS 边缘返回手势） =====
   // 日视图跟手右移，月视图同步亮起滑回（压暗层与视差全程跟随手指）
