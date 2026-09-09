@@ -76,9 +76,11 @@
   }
 
   /* 月视图左右划切换月份：日历滑轨，旧月滑出新月滑入（跟手） */
-  .calendar-wrap {
+  /* 滑轨外包一层裁剪视口：预渲染的相邻月份页绝不露出月视图 */
+  .cal-viewport {
     position: relative;
-    overflow-x: hidden;        /* 裁掉滑轨两侧的相邻月份页 */
+    overflow: hidden;              /* 四向全裁：两侧的相邻页、滑动中的溢出全部不可见 */
+    contain: layout paint;         /* 隔离布局与绘制：滑动不引发外层重排/重绘，防卡顿 */
   }
   .cal-track {
     display: grid;
@@ -88,21 +90,20 @@
   }
   .cal-track.dragging { transition: none; }
   .cal-track .cal-page {
-    grid-area: 1 / 1;          /* 三层页面同格叠放 */
+    grid-area: 1 / 1;              /* 三层页面同格叠放 */
     min-height: 100%;
+    will-change: transform;        /* 各页独立合成层：左右两向滑动都无需按需栅格化，杜绝方向性卡顿 */
   }
   /* 各页再偏移到本月的左/右侧：滑轨平移时相邻月从侧面滑入 */
   #calPrev { transform: translateX(-100%); }
   #calCur  { transform: translateX(0); }
   #calNext { transform: translateX(100%); }
 
-  /* 日视图：实体卡片从右侧推入，左侧露出月视图边缘（iOS sheet 风格） */
+  /* 日视图：全屏页面从右侧推入，完整占有整个手机屏幕 */
   .day-view {
-    width: 94%;
+    width: 100%;
     background: #f2f2f7;
-    border-radius: 18px 0 0 18px;
-    box-shadow: -10px 0 30px rgba(0,0,0,0.18);
-    overflow: hidden;   /* 让头部毛玻璃贴合卡片圆角 */
+    overflow: hidden;
     transform: translateX(106%);
   }
   .day-view.active {
@@ -161,7 +162,9 @@
     transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .cal-cell:active { transform: scale(0.93); }
+  /* 空白占位格：不同月份分开，界限清晰 */
   .cal-cell.blank { background: transparent; cursor: default; }
+
   /* 未来日期：可点开查看，但不能记账（置灰示意） */
   .cal-cell.future {
     opacity: 0.45;
@@ -652,10 +655,12 @@
       <div class="weekday-row">
         <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
       </div>
-      <div class="cal-track" id="calTrack">
-        <div class="cal-page" id="calPrev"></div>
-        <div class="cal-page" id="calCur"><div class="calendar" id="calendar"></div></div>
-        <div class="cal-page" id="calNext"></div>
+      <div class="cal-viewport">
+        <div class="cal-track" id="calTrack">
+          <div class="cal-page" id="calPrev"></div>
+          <div class="cal-page" id="calCur"><div class="calendar" id="calendar"></div></div>
+          <div class="cal-page" id="calNext"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -815,47 +820,63 @@
     dayView.classList.add('active');
   }
   function showMonth() {
+    // 回到当前所查看日期所在的月份（点了相邻月日期后返回，月视图跟着切换）
+    const [y, m] = curDate.split('-').map(Number);
+    if (y && m) viewDate = new Date(y, m - 1, 1);
     renderMonth();
     dayView.classList.remove('active');
     monthView.classList.remove('pushed');
   }
 
   // ===== 月视图渲染 =====
-  // 生成某年某月的日历格 HTML（含当日结余与今天标记）
-  function calHTML(y, m) {
-    const prefix = `${y}-${String(m + 1).padStart(2, '0')}`;
+  // 汇总一次：日期 → 当日收/支（避免每个日历格全量扫描账单，切换大数据量也丝滑）
+  function buildNetMap() {
+    const map = {};
+    bills.forEach(b => {
+      const e = map[b.date] || (map[b.date] = { exp: 0, inc: 0 });
+      b.type === 'expense' ? e.exp += b.amount : e.inc += b.amount;
+    });
+    return map;
+  }
+
+  // 单月日历：每月固定 6 周（42 格）网格，首尾以空白格补齐——
+  // 高度恒定保证切换动画丝滑；只显示本月份，月份之间界限清晰
+  function calHTML(y, m, netMap) {
+    const today = todayStr();
     const daysInMonth = new Date(y, m + 1, 0).getDate();      // '0 号' 技巧
     const firstWeekday = new Date(y, m, 1).getDay();
-    const today = todayStr();
+    const prefix = `${y}-${String(m + 1).padStart(2, '0')}`;
 
     let html = '<div class="calendar">';
     for (let i = 0; i < firstWeekday; i++) {
-      html += '<div class="cal-cell blank"></div>';
+      html += '<div class="cal-cell blank"></div>';   // 1 号前的空白
     }
     for (let d = 1; d <= daysInMonth; d++) {
       const dateStr = `${prefix}-${String(d).padStart(2, '0')}`;
-      let dExp = 0, dInc = 0;
-      bills.forEach(b => {
-        if (b.date === dateStr) b.type === 'expense' ? dExp += b.amount : dInc += b.amount;
-      });
-      const dNet = dInc - dExp;
+      const net = netMap[dateStr];
+      const dNet = net ? net.inc - net.exp : 0;
+      const hasBills = !!net;
 
       html += `
         <div class="cal-cell ${dateStr === today ? 'today' : ''} ${dateStr > today ? 'future' : ''}" data-date="${dateStr}">
           <div class="day-num">${d}</div>
-          ${dExp + dInc > 0 ? `<div class="day-net ${dNet >= 0 ? 'pos' : 'neg'}">${dNet >= 0 ? '+' : '-'}${Math.abs(dNet).toFixed(Math.abs(dNet) % 1 ? 2 : 0)}</div>` : ''}
+          ${hasBills ? `<div class="day-net ${dNet >= 0 ? 'pos' : 'neg'}">${dNet >= 0 ? '+' : '-'}${Math.abs(dNet).toFixed(Math.abs(dNet) % 1 ? 2 : 0)}</div>` : ''}
         </div>`;
+    }
+    const tail = 42 - firstWeekday - daysInMonth;
+    for (let i = 0; i < tail; i++) {
+      html += '<div class="cal-cell blank"></div>';   // 月末补满 6 周
     }
     html += '</div>';
     return html;
   }
 
-  function renderMonth() {
+  // 更新月视图标题与当月汇总（增量换页时单独调用，避免整月重绘）
+  function updateMonthHeader() {
     const y = viewDate.getFullYear();
     const m = viewDate.getMonth();
     document.getElementById('monthTitle').textContent = `${y}年${m + 1}月`;
 
-    // 当月汇总
     const prefix = `${y}-${String(m + 1).padStart(2, '0')}`;
     let mExp = 0, mInc = 0;
     bills.forEach(b => {
@@ -869,11 +890,18 @@
     mIncEl.textContent = mInc.toFixed(2);
     fitValue(mExpEl);
     fitValue(mIncEl);
+  }
 
-    // 三层滑轨：上月 / 本月 / 下月，为左右划切换做准备
-    document.getElementById('calCur').innerHTML = calHTML(y, m);
-    document.getElementById('calPrev').innerHTML = calHTML(y, m - 1 < 0 ? y - 1 : y, m - 1 < 0 ? 11 : m - 1);
-    document.getElementById('calNext').innerHTML = calHTML(m + 1 > 11 ? y + 1 : y, m + 1 > 11 ? 0 : m + 1);
+  function renderMonth() {
+    updateMonthHeader();
+    const y = viewDate.getFullYear();
+    const m = viewDate.getMonth();
+
+    // 三层滑轨：上月 / 本月 / 下月（共享一份汇总表，一次构建三次复用）
+    const netMap = buildNetMap();
+    document.getElementById('calCur').innerHTML = calHTML(y, m, netMap);
+    document.getElementById('calPrev').innerHTML = calHTML(y, m - 1 < 0 ? y - 1 : y, m - 1 < 0 ? 11 : m - 1, netMap);
+    document.getElementById('calNext').innerHTML = calHTML(m + 1 > 11 ? y + 1 : y, m + 1 > 11 ? 0 : m + 1, netMap);
     // 复位滑轨：瞬时跳变（关闭过渡 + 强制回流），避免切换后二次反向滑动
     calTrack.classList.add('dragging');
     calTrack.style.transform = 'translateX(0)';
@@ -1129,8 +1157,7 @@
       monthView.style.transform = '';
       monthView.style.removeProperty('--push-dim');
       if (shouldBack) {
-        monthView.classList.remove('pushed');   // 遮罩淡出，月视图滑回原位
-        dayView.classList.remove('active');
+        showMonth();
       }
       // 不足阈值：保留 pushed，弹回原位
     }
@@ -1147,17 +1174,24 @@
     backDrag = null;
   }, { passive: true });
 
-  // ===== 月视图左右划切换月份（跟手滑轨） =====
-  // 日历三层页面（上月/本月/下月）叠放，拖拽时整体跟手位移，
-  // 松手超过 1/3 屏宽或快速轻扫则切换月份，否则弹回
-  let monthDrag = null;   // { startX, startY, locked, base }
+  // ===== 月视图左右划切换月份（跟手滑轨，动画可打断） =====
+  // 三层页面（上月/本月/下月）叠放，拖拽时整体跟手位移；
+  // 松手按落点判定：过半即切换，否则弹回。滑动落定途中可随时按住反向拖
+
+  // 读取滑轨当前实际位移（含动画进行中的实时位置）
+  function trackCurrentX() {
+    const t = getComputedStyle(calTrack).transform;
+    if (!t || t === 'none') return 0;
+    const m = t.match(/matrix\(([^)]+)\)/);
+    if (!m) return 0;
+    return parseFloat(m[1].split(',')[4]) || 0;
+  }
+
+  let monthDrag = null;      // { startX, startY, locked, originX, x, w }
+  let cancelSettle = null;   // 落定动画被新手势打断时的清理函数
 
   calendarWrap.addEventListener('touchstart', e => {
-    monthDrag = {
-      startX: e.touches[0].clientX,
-      startY: e.touches[0].clientY,
-      locked: false
-    };
+    monthDrag = { startX: e.touches[0].clientX, startY: e.touches[0].clientY, locked: false };
   }, { passive: true });
 
   calendarWrap.addEventListener('touchmove', e => {
@@ -1167,51 +1201,110 @@
     if (!monthDrag.locked) {
       if (Math.abs(dx) < 12 || Math.abs(dx) <= Math.abs(dy)) return;   // 横向意图判定
       monthDrag.locked = true;
+      // 打断进行中的落定动画：先读当前动画位置，再冻结（连续翻页不断触）
+      const frozen = trackCurrentX();
+      if (cancelSettle) { cancelSettle(); cancelSettle = null; }
       calTrack.classList.add('dragging');
+      calTrack.style.transform = `translateX(${frozen}px)`;
+      monthDrag.originX = frozen;
     }
-    const w = calendarWrap.offsetWidth;
-    // 橡皮筋：左右越界（上月之前/下月之后仍可拖但有阻尼）
-    let x = dx;
-    monthDrag.base = x;
+    // 滑轨自身宽度做位移基准：滑出量恰好等于一页日历宽（各月固定 42 格，等价无差异）
+    const w = calTrack.offsetWidth || 320;
     monthDrag.w = w;
+    let x = monthDrag.originX + dx;
+    // 橡皮筋：不拖出两侧相邻页之外
+    if (x > w) x = w + (x - w) * 0.3;
+    else if (x < -w) x = -w + (x + w) * 0.3;
+    monthDrag.x = x;
     calTrack.style.transform = `translateX(${x}px)`;
   }, { passive: true });
 
-  // 切换月份（带滑轨动画）：先滑出目标月，动画结束后重绘三层并复位
-  let monthSwitching = false;   // 防抖：动画进行中忽略新触发
-  function switchMonth(delta) {
-    if (monthSwitching) return;
-    monthSwitching = true;
-    const w = calendarWrap.offsetWidth || 320;   // 旋转屏幕瞬间可能为 0，兜底防错位
-    calTrack.classList.remove('dragging');
-    calTrack.style.transform = `translateX(${-delta * w}px)`;
-    viewDate.setMonth(viewDate.getMonth() + delta);
-    setTimeout(() => { renderMonth(); monthSwitching = false; }, 400);
-  }
-
-  calendarWrap.addEventListener('touchend', () => {
+  // 松手/手势被打断：按落点就近落定（过半切换，否则弹回）
+  function releaseTrack() {
     if (!monthDrag) return;
-    const { locked, base, w } = monthDrag;
-    if (locked) {
-      const threshold = (w || 1) / 3;
+    if (monthDrag.locked) {
+      const x = monthDrag.x || 0;
+      const w = monthDrag.w || calTrack.offsetWidth || 320;
       calTrack.classList.remove('dragging');
-      if (base < -threshold) {
-        switchMonth(1);   // 左划 → 下个月
-      } else if (base > threshold) {
-        switchMonth(-1);  // 右划 → 上个月
+      if (x <= -w / 2) {
+        switchMonth(1);    // 左划过半 → 下个月
+      } else if (x >= w / 2) {
+        switchMonth(-1);   // 右划过半 → 上个月
       } else {
         calTrack.style.transform = 'translateX(0)';   // 弹回本月
       }
     }
     monthDrag = null;
-  }, { passive: true });
-  calendarWrap.addEventListener('touchcancel', () => {
-    if (monthDrag && monthDrag.locked) {
-      calTrack.classList.remove('dragging');
-      calTrack.style.transform = 'translateX(0)';
+  }
+  calendarWrap.addEventListener('touchend', releaseTrack, { passive: true });
+  calendarWrap.addEventListener('touchcancel', releaseTrack, { passive: true });
+
+  // ===== 月份切换：滑入相邻页后增量换页 =====
+  let monthSwitching = false;   // 按钮连点防抖
+  function switchMonth(delta) {
+    if (monthSwitching) return;
+    monthSwitching = true;
+    const w = calTrack.offsetWidth || 320;   // 旋转屏幕瞬间可能为 0，兜底防错位
+    calTrack.classList.remove('dragging');
+    calTrack.style.transform = `translateX(${-delta * w}px)`;   // 恰好滑入一整页日历
+
+    let done = false;
+    let timer = null;
+    const onEnd = e => {
+      if (e.target !== calTrack || e.propertyName !== 'transform') return;
+      finish();
+    };
+    const finish = () => {
+      if (done) return;
+      done = true;
+      cancelSettle = null;
+      calTrack.removeEventListener('transitionend', onEnd);
+      clearTimeout(timer);
+      viewDate.setMonth(viewDate.getMonth() + delta);
+      shiftPages(delta);   // 增量换页 + 瞬时复位，一帧完成
+      monthSwitching = false;
+    };
+    cancelSettle = () => {   // 被新手势打断：不换月，控制权交还手势
+      if (done) return;
+      done = true;
+      calTrack.removeEventListener('transitionend', onEnd);
+      clearTimeout(timer);
+      monthSwitching = false;
+    };
+    // 等过渡真正结束（过滤子元素冒泡），与动画严格同步
+    calTrack.addEventListener('transitionend', onEnd);
+    timer = setTimeout(finish, 700);   // 兜底：后台标签页 transitionend 丢失
+  }
+
+  // 增量换页：只渲染一个新页面，另外两页移动现有 DOM 节点（不重建，落定零卡顿）
+  // 滑到下月(+)后：本月页→上月槽，下月页→本月槽，只需渲染新的下月页；上月(-)同理
+  function shiftPages(delta) {
+    const calPrev = document.getElementById('calPrev');
+    const calCur  = document.getElementById('calCur');
+    const calNext = document.getElementById('calNext');
+    const netMap = buildNetMap();
+    const y = viewDate.getFullYear();
+    const m = viewDate.getMonth();
+
+    if (delta > 0) {
+      calPrev.innerHTML = '';
+      calPrev.appendChild(calCur.firstElementChild);
+      calCur.appendChild(calNext.firstElementChild);
+      calNext.innerHTML = calHTML(m + 1 > 11 ? y + 1 : y, m + 1 > 11 ? 0 : m + 1, netMap);
+    } else {
+      calNext.innerHTML = '';
+      calNext.appendChild(calCur.firstElementChild);
+      calCur.appendChild(calPrev.firstElementChild);
+      calPrev.innerHTML = calHTML(m - 1 < 0 ? y - 1 : y, m - 1 < 0 ? 11 : m - 1, netMap);
     }
-    monthDrag = null;
-  }, { passive: true });
+    updateMonthHeader();
+
+    // 瞬时复位：换页前后视口内容一致（旧相邻页升为本月页），肉眼无感
+    calTrack.classList.add('dragging');
+    calTrack.style.transform = 'translateX(0)';
+    void calTrack.offsetWidth;
+    calTrack.classList.remove('dragging');
+  }
 
   // ===== 键盘面板 =====
   const sheet = document.getElementById('sheet');
