@@ -117,7 +117,22 @@
     align-items: center;
     gap: 10px;
   }
-  .month-title { font-size: 20px; font-weight: 700; }
+  .month-title {
+    font-size: 20px; font-weight: 700;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 8px;
+    transition: background 0.15s;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .month-title:active { background: rgba(118,118,128,0.12); transform: scale(0.97); }
+  .picker-chevron {
+    font-size: 11px;
+    color: #8e8e93;
+    transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+    display: inline-block;
+  }
+  .month-title.open .picker-chevron { transform: rotate(180deg); }
   .nav-btn {
     border: none;
     background: rgba(118,118,128,0.12);
@@ -129,6 +144,103 @@
     cursor: pointer;
   }
   .nav-btn:active { transform: scale(0.9); }
+
+  /* ===== 年月选择器：iOS sheet 风格 ===== */
+  .ym-sheet-mask {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.4);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+    z-index: 25;
+  }
+  .ym-sheet-mask.show { opacity: 1; pointer-events: auto; }
+  .ym-sheet {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: #f2f2f7;
+    border-radius: 16px 16px 0 0;
+    padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
+    padding-top: 12px;
+    transform: translateY(100%);
+    transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+    z-index: 26;
+    max-height: 60%;
+    display: flex; flex-direction: column;
+  }
+  .ym-sheet.show { transform: translateY(0); }
+  .ym-handle {
+    width: 36px; height: 4px;
+    background: rgba(60,60,67,0.29);
+    border-radius: 2px;
+    margin: 0 auto 12px;
+  }
+  .ym-sheet-title {
+    text-align: center;
+    font-size: 13px;
+    color: #8e8e93;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+  .ym-sheet-body {
+    flex: 1;
+    display: flex;
+    gap: 12px;
+    min-height: 180px;
+    overflow: hidden;
+  }
+  .ym-col {
+    flex: 1;
+    overflow-y: scroll;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: y mandatory;
+    scrollbar-width: none;
+    max-height: 200px;
+  }
+  .ym-col::-webkit-scrollbar { display: none; }
+  .ym-item {
+    padding: 10px 12px;
+    text-align: center;
+    font-size: 15px;
+    color: #1c1c1e;
+    scroll-snap-align: center;
+    border-radius: 10px;
+    margin: 2px 0;
+    transition: background 0.15s, color 0.15s, transform 0.15s;
+  }
+  .ym-item.selected {
+    background: #007aff;
+    color: #fff;
+    font-weight: 600;
+  }
+  .ym-item.today {
+    color: #007aff;
+  }
+  .ym-item.today.selected {
+    background: #007aff;
+    color: #fff;
+  }
+  .ym-item:active { transform: scale(0.96); }
+  .ym-sheet-actions {
+    display: flex;
+    gap: 10px;
+    padding-top: 12px;
+    border-top: 0.5px solid rgba(60,60,67,0.18);
+    margin-top: 8px;
+  }
+  .ym-btn {
+    flex: 1;
+    border: none;
+    height: 40px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.15s;
+  }
+  .ym-btn:active { transform: scale(0.97); }
+  .ym-btn-cancel { background: rgba(118,118,128,0.12); color: #1c1c1e; }
+  .ym-btn-today { background: rgba(118,118,128,0.12); color: #007aff; }
+  .ym-btn-confirm { background: #007aff; color: #fff; }
   .calendar-wrap {
     flex: 1;
     overflow-y: auto;
@@ -639,7 +751,10 @@
     <div class="header">
       <div class="month-nav">
         <button class="nav-btn" id="prevMonth">‹</button>
-        <div class="month-title" id="monthTitle"></div>
+        <div class="month-title" id="monthTitle">
+          2026年9月
+          <span class="picker-chevron">▼</span>
+        </div>
         <button class="nav-btn" id="nextMonth">›</button>
       </div>
       <div class="amounts">
@@ -700,6 +815,22 @@
 
   <!-- 遮罩 -->
   <div class="mask" id="mask"></div>
+
+  <!-- 年月快捷选择器：iOS sheet 风格，从底部滑出 -->
+  <div class="ym-sheet-mask" id="ymMask"></div>
+  <div class="ym-sheet" id="ymSheet">
+    <div class="ym-handle"></div>
+    <div class="ym-sheet-title">选择年月</div>
+    <div class="ym-sheet-body">
+      <div class="ym-col" id="ymYears"></div>
+      <div class="ym-col" id="ymMonths"></div>
+    </div>
+    <div class="ym-sheet-actions">
+      <button class="ym-btn ym-btn-today" id="ymToday">今天</button>
+      <button class="ym-btn ym-btn-cancel" id="ymCancel">取消</button>
+      <button class="ym-btn ym-btn-confirm" id="ymConfirm">确定</button>
+    </div>
+  </div>
 
   <!-- 数字键盘面板 -->
   <div class="sheet" id="sheet">
@@ -884,7 +1015,7 @@
     saneViewDate();   // 渲染前自愈：即使 viewDate 被污染也不会显示"2194年"之类异常
     const y = viewDate.getFullYear();
     const m = viewDate.getMonth();
-    document.getElementById('monthTitle').textContent = `${y}年${m + 1}月`;
+    document.getElementById('monthTitle').innerHTML = `${y}年${m + 1}月 <span class="picker-chevron">▼</span>`;
 
     const prefix = `${y}-${String(m + 1).padStart(2, '0')}`;
     let mExp = 0, mInc = 0;
@@ -1506,6 +1637,97 @@
     if (key === 'save') saveBill();
     else if (key) pressKey(key);
   });
+  // ===== 年月快捷选择器 =====
+  const ymMask = document.getElementById('ymMask');
+  const ymSheet = document.getElementById('ymSheet');
+  const ymYears = document.getElementById('ymYears');
+  const ymMonths = document.getElementById('ymMonths');
+  let ymSelY, ymSelM;   // sheet 当前选中的年月（提交前）
+
+  function buildYMCols() {
+    const today = new Date();
+    const ty = today.getFullYear(), tm = today.getMonth() + 1;
+    // 年份：从 2015 到明年（够用且不拥挤）
+    const curY = viewDate.getFullYear();
+    const curM = viewDate.getMonth() + 1;
+    const yMin = 2015, yMax = Math.max(ty + 1, curY + 1);
+    ymSelY = curY; ymSelM = curM;
+    ymYears.innerHTML = '';
+    for (let y = yMin; y <= yMax; y++) {
+      const div = document.createElement('div');
+      div.className = 'ym-item' + (y === ymSelY ? ' selected' : '') + (y === ty ? ' today' : '');
+      div.textContent = `${y}年`;
+      div.dataset.y = y;
+      div.addEventListener('click', () => {
+        ymSelY = y;
+        ymYears.querySelectorAll('.ym-item').forEach(i => i.classList.toggle('selected', +i.dataset.y === y));
+      });
+      ymYears.appendChild(div);
+    }
+    ymMonths.innerHTML = '';
+    for (let m = 1; m <= 12; m++) {
+      const div = document.createElement('div');
+      div.className = 'ym-item' + (m === ymSelM ? ' selected' : '') + (yMin === yMax && m === tm ? ' today' : '');
+      div.textContent = `${m}月`;
+      div.dataset.m = m;
+      div.addEventListener('click', () => {
+        ymSelM = m;
+        ymMonths.querySelectorAll('.ym-item').forEach(i => i.classList.toggle('selected', +i.dataset.m === m));
+      });
+      ymMonths.appendChild(div);
+    }
+  }
+
+  function openYMPicker() {
+    if (ymSheet.classList.contains('show')) return;
+    // 日视图打开时先回到月视图（title 在月视图可见）
+    if (dayView.classList.contains('active')) showMonth();
+    buildYMCols();
+    ymMask.classList.add('show');
+    ymSheet.classList.add('show');
+    document.getElementById('monthTitle').classList.add('open');
+  }
+
+  function closeYMPicker() {
+    ymMask.classList.remove('show');
+    ymSheet.classList.remove('show');
+    document.getElementById('monthTitle').classList.remove('open');
+  }
+
+  function confirmYMPicker() {
+    const today = new Date();
+    let y = ymSelY, m = ymSelM;
+    // 不允许选未来月（日视图加过保护，月视图选未来月也不合理）
+    if (y > today.getFullYear() || (y === today.getFullYear() && m > today.getMonth() + 1)) {
+      y = today.getFullYear(); m = today.getMonth() + 1;
+    }
+    viewDate = new Date(y, m - 1, 1);
+    // 如果选的就是今天所在月，顺便同步 curDate
+    if (y === today.getFullYear() && m === today.getMonth() + 1) {
+      curDate = todayStr();
+    }
+    renderMonth();
+    closeYMPicker();
+  }
+
+  document.getElementById('monthTitle').addEventListener('click', e => {
+    e.stopPropagation();
+    openYMPicker();
+  });
+  ymMask.addEventListener('click', closeYMPicker);
+  document.getElementById('ymCancel').addEventListener('click', closeYMPicker);
+  document.getElementById('ymConfirm').addEventListener('click', confirmYMPicker);
+  document.getElementById('ymToday').addEventListener('click', () => {
+    const t = new Date();
+    ymSelY = t.getFullYear(); ymSelM = t.getMonth() + 1;
+    ymYears.querySelectorAll('.ym-item').forEach(i => i.classList.toggle('selected', +i.dataset.y === ymSelY));
+    ymMonths.querySelectorAll('.ym-item').forEach(i => i.classList.toggle('selected', +i.dataset.m === ymSelM));
+  });
+  // 键盘面板打开时关闭年月选择器（避免 z-index 冲突）
+  document.getElementById('fab').addEventListener('click', () => {
+    if (ymSheet.classList.contains('show')) closeYMPicker();
+  });
+
   document.getElementById('backBtn').addEventListener('click', showMonth);
   document.getElementById('prevMonth').addEventListener('click', () => switchMonth(-1));
   document.getElementById('nextMonth').addEventListener('click', () => switchMonth(1));
@@ -1554,6 +1776,40 @@
   renderMonth();
   updateAmountDisplay();
   showDay();
+
+  // ===== 跨天自动刷新：设备日期变了就重新同步状态 =====
+  // 三种触发方式互补：定时器（0 点跨天）、visibilitychange（切后台久了回来）、focus（浏览器窗口重新聚焦）
+  let lastToday = todayStr();
+  function onDayChanged() {
+    const t = todayStr();
+    if (t === lastToday) return;
+    lastToday = t;
+    // 自愈：新的一天可能让昨天数据恢复合法，也可能让新日期有未来记录
+    bills.forEach(b => {
+      if (!b.date || !/^\d{4}-\d{2}-\d{2}$/.test(b.date)) {
+        if (b.ts) { const d = new Date(b.ts); b.date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+      }
+    });
+    const cleaned = bills.filter(b => b.date <= t);
+    if (cleaned.length !== bills.length) { bills = cleaned; saveBills(bills); }
+    // 同步 viewDate 到新今天，刷新所有视图
+    const today = new Date();
+    viewDate = new Date(today.getFullYear(), today.getMonth(), 1);
+    // 如果当前在看旧日期（非今天且非未来），让用户继续看；在看旧今天的自动跳到新今天
+    if (curDate !== t && curDate < t) {
+      // 用户在回看历史，保持不动（但日历和汇总必须刷新，因为月份变了）
+    } else {
+      curDate = t;
+    }
+    renderMonth();
+    renderDay();
+    updateAmountDisplay();
+  }
+  // 每 30 秒检查一次（够用且轻量）
+  setInterval(onDayChanged, 30000);
+  // 页面从后台恢复 / 窗口重新聚焦时额外检查一次（防止 30s 轮询漏掉跨天）
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) onDayChanged(); });
+  window.addEventListener('focus', onDayChanged);
 </script>
 </body>
 </html>
