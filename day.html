@@ -182,44 +182,57 @@
     margin-bottom: 12px;
   }
   .ym-sheet-body {
+    position: relative;
     flex: 1;
     display: flex;
     gap: 12px;
-    min-height: 180px;
+    min-height: 220px;
     overflow: hidden;
+    /* 上下渐隐遮罩：iOS picker 风格，远离中间的条目淡出 */
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 25%, #000 75%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 25%, #000 75%, transparent 100%);
+  }
+  /* 中间选中指示条：iOS picker 的核心视觉 */
+  .ym-sheet-body::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 44px;
+    background: rgba(0, 122, 255, 0.12);
+    border-radius: 10px;
+    pointer-events: none;
+    z-index: 2;
   }
   .ym-col {
     flex: 1;
     overflow-y: scroll;
     -webkit-overflow-scrolling: touch;
-    scroll-snap-type: y mandatory;
     scrollbar-width: none;
-    max-height: 200px;
+    position: relative;
+    z-index: 1;
   }
   .ym-col::-webkit-scrollbar { display: none; }
   .ym-item {
-    padding: 10px 12px;
+    height: 44px;
+    line-height: 44px;
     text-align: center;
-    font-size: 15px;
+    font-size: 16px;
+    font-weight: 500;
     color: #1c1c1e;
-    scroll-snap-align: center;
-    border-radius: 10px;
-    margin: 2px 0;
-    transition: background 0.15s, color 0.15s, transform 0.15s;
+    transition: font-weight 0.15s, color 0.15s;
   }
   .ym-item.selected {
-    background: #007aff;
-    color: #fff;
-    font-weight: 600;
+    color: #007aff;
+    font-weight: 700;
+    font-size: 17px;
   }
-  .ym-item.today {
+  .ym-item.today:not(.selected) {
     color: #007aff;
   }
-  .ym-item.today.selected {
-    background: #007aff;
-    color: #fff;
-  }
-  .ym-item:active { transform: scale(0.96); }
+  .ym-item:active { opacity: 0.7; }
+  .ym-spacer { height: 44px; line-height: 44px; color: transparent; pointer-events: none; }
   .ym-sheet-actions {
     display: flex;
     gap: 10px;
@@ -1647,45 +1660,121 @@
   function buildYMCols() {
     const today = new Date();
     const ty = today.getFullYear(), tm = today.getMonth() + 1;
-    // 年份：从 2015 到明年（够用且不拥挤）
     const curY = viewDate.getFullYear();
     const curM = viewDate.getMonth() + 1;
-    const yMin = 2015, yMax = Math.max(ty + 1, curY + 1);
+    // 年份：只显示有账单记录的年份 + 当前年（即使没记录也要能看到当前月），不显示未来
+    const yearsWithBills = new Set(bills.map(b => +b.date.slice(0, 4)));
+    yearsWithBills.add(ty);
+    if (!yearsWithBills.has(curY)) yearsWithBills.add(curY);
+    const yList = [...yearsWithBills].sort((a, b) => a - b).filter(y => y <= ty);
+    const yMin = yList[0], yMax = ty;
     ymSelY = curY; ymSelM = curM;
+    if (ymSelY > ty) ymSelY = ty;
+
     ymYears.innerHTML = '';
+    for (let i = 0; i < 3; i++) { const s = document.createElement('div'); s.className = 'ym-item ym-spacer'; ymYears.appendChild(s); }
     for (let y = yMin; y <= yMax; y++) {
       const div = document.createElement('div');
       div.className = 'ym-item' + (y === ymSelY ? ' selected' : '') + (y === ty ? ' today' : '');
       div.textContent = `${y}年`;
       div.dataset.y = y;
-      div.addEventListener('click', () => {
-        ymSelY = y;
-        ymYears.querySelectorAll('.ym-item').forEach(i => i.classList.toggle('selected', +i.dataset.y === y));
-      });
       ymYears.appendChild(div);
     }
+    for (let i = 0; i < 3; i++) { const s = document.createElement('div'); s.className = 'ym-item ym-spacer'; ymYears.appendChild(s); }
+
     ymMonths.innerHTML = '';
-    for (let m = 1; m <= 12; m++) {
+    const mMax = (ymSelY === ty) ? tm : 12;   // 当前年只到本月，往年 1-12
+    if (ymSelY === ty && ymSelM > tm) ymSelM = tm;
+    for (let i = 0; i < 3; i++) { const s = document.createElement('div'); s.className = 'ym-item ym-spacer'; ymMonths.appendChild(s); }
+    for (let m = 1; m <= mMax; m++) {
       const div = document.createElement('div');
-      div.className = 'ym-item' + (m === ymSelM ? ' selected' : '') + (yMin === yMax && m === tm ? ' today' : '');
+      div.className = 'ym-item' + (m === ymSelM ? ' selected' : '') + (ymSelY === ty && m === tm ? ' today' : '');
       div.textContent = `${m}月`;
       div.dataset.m = m;
-      div.addEventListener('click', () => {
-        ymSelM = m;
-        ymMonths.querySelectorAll('.ym-item').forEach(i => i.classList.toggle('selected', +i.dataset.m === m));
-      });
       ymMonths.appendChild(div);
     }
+    for (let i = 0; i < 3; i++) { const s = document.createElement('div'); s.className = 'ym-item ym-spacer'; ymMonths.appendChild(s); }
   }
+
+  // 滚动到选中项居中
+  function scrollColToCenter(col, val, attr, smooth = true) {
+    requestAnimationFrame(() => {
+      const target = col.querySelector(`.ym-item[data-${attr}="${val}"]`);
+      if (!target) return;
+      const top = target.offsetTop + target.offsetHeight / 2 - col.clientHeight / 2;
+      col.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
+    });
+  }
+
+  // 滚动时实时更新 selected 高亮 + 滚轮结束后对齐居中
+  function bindColLiveSelect(col, attr) {
+    let raf = null;
+    let snapTimer = null;
+
+    function findBest() {
+      const mid = col.scrollTop + col.clientHeight / 2;
+      let best = null, bestDist = Infinity;
+      col.querySelectorAll('.ym-item').forEach(item => {
+        if (item.classList.contains('ym-spacer')) return;
+        const itemMid = item.offsetTop + item.offsetHeight / 2;
+        const dist = Math.abs(itemMid - mid);
+        if (dist < bestDist) { bestDist = dist; best = item; }
+      });
+      return best;
+    }
+
+    col.addEventListener('scroll', () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        const best = findBest();
+        if (best) {
+          col.querySelectorAll('.ym-item.selected').forEach(i => i.classList.remove('selected'));
+          best.classList.add('selected');
+          if (attr === 'y') ymSelY = +best.dataset.y; else ymSelM = +best.dataset.m;
+        }
+      });
+      // 滚动停止 100ms 后，平滑吸附到最近项的正中位置
+      clearTimeout(snapTimer);
+      snapTimer = setTimeout(() => {
+        const best = findBest();
+        if (best) {
+          const top = best.offsetTop + best.offsetHeight / 2 - col.clientHeight / 2;
+          col.scrollTo({ top, behavior: 'smooth' });
+        }
+      }, 100);
+    }, { passive: true });
+
+    // 拦截 wheel 事件：一次滚轮 = 一个 item，立刻对齐（无动画）
+    col.addEventListener('wheel', e => {
+      e.preventDefault();
+      const items = [...col.querySelectorAll('.ym-item')].filter(i => !i.classList.contains('ym-spacer'));
+      const curMid = col.scrollTop + col.clientHeight / 2;
+      let curIdx = 0;
+      for (let i = 0; i < items.length; i++) {
+        const m = items[i].offsetTop + items[i].offsetHeight / 2;
+        if (m <= curMid) curIdx = i; else break;
+      }
+      const nextIdx = Math.max(0, Math.min(items.length - 1, curIdx + (e.deltaY > 0 ? 1 : -1)));
+      const top = items[nextIdx].offsetTop + items[nextIdx].offsetHeight / 2 - col.clientHeight / 2;
+      col.scrollTo({ top, behavior: 'auto' });   // 立即对齐，不动画
+    }, { passive: false });
+  }
+  bindColLiveSelect(ymYears, 'y');
+  bindColLiveSelect(ymMonths, 'm');
 
   function openYMPicker() {
     if (ymSheet.classList.contains('show')) return;
-    // 日视图打开时先回到月视图（title 在月视图可见）
     if (dayView.classList.contains('active')) showMonth();
     buildYMCols();
     ymMask.classList.add('show');
     ymSheet.classList.add('show');
     document.getElementById('monthTitle').classList.add('open');
+    // sheet 动画结束后滚到选中项居中
+    setTimeout(() => {
+      scrollColToCenter(ymYears, ymSelY, 'y');
+      scrollColToCenter(ymMonths, ymSelM, 'm');
+    }, 100);
   }
 
   function closeYMPicker() {
@@ -1697,12 +1786,10 @@
   function confirmYMPicker() {
     const today = new Date();
     let y = ymSelY, m = ymSelM;
-    // 不允许选未来月（日视图加过保护，月视图选未来月也不合理）
     if (y > today.getFullYear() || (y === today.getFullYear() && m > today.getMonth() + 1)) {
       y = today.getFullYear(); m = today.getMonth() + 1;
     }
     viewDate = new Date(y, m - 1, 1);
-    // 如果选的就是今天所在月，顺便同步 curDate
     if (y === today.getFullYear() && m === today.getMonth() + 1) {
       curDate = todayStr();
     }
@@ -1720,10 +1807,9 @@
   document.getElementById('ymToday').addEventListener('click', () => {
     const t = new Date();
     ymSelY = t.getFullYear(); ymSelM = t.getMonth() + 1;
-    ymYears.querySelectorAll('.ym-item').forEach(i => i.classList.toggle('selected', +i.dataset.y === ymSelY));
-    ymMonths.querySelectorAll('.ym-item').forEach(i => i.classList.toggle('selected', +i.dataset.m === ymSelM));
+    scrollColToCenter(ymYears, ymSelY, 'y');
+    scrollColToCenter(ymMonths, ymSelM, 'm');
   });
-  // 键盘面板打开时关闭年月选择器（避免 z-index 冲突）
   document.getElementById('fab').addEventListener('click', () => {
     if (ymSheet.classList.contains('show')) closeYMPicker();
   });
