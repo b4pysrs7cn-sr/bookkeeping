@@ -85,7 +85,7 @@
   .cal-track {
     display: grid;
     grid-template-columns: 1fr;
-    transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+    transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);   /* iOS 日历节奏：快落定不失质感 */
     will-change: transform;
   }
   .cal-track.dragging { transition: none; }
@@ -1248,12 +1248,15 @@
         const dt = s[s.length - 1].t - s[0].t;
         if (dt > 0) vx = (s[s.length - 1].x - s[0].x) / dt * 1000;
       }
-      const fling = Math.abs(x) > 24 && Math.abs(vx) > 250;   // 快扫判定（位移与速度同向时才生效）
+      // iOS 分页决策：当前位移 + 惯性投影距离（0.22s 内的滑行量）越过阈值即切换
+      // 慢拖靠位移、轻扫靠投影；阈值取 1/3 页与 150px 的较小者（宽屏下不失灵敏度）
+      const projected = x + vx * 0.22;
+      const threshold = Math.min(w / 3, 150);
       calTrack.classList.remove('dragging');
-      if (x <= -w / 2 || (fling && x < 0 && vx < 0)) {
-        switchMonth(1);    // 左划过半 / 快速左扫 → 下个月
-      } else if (x >= w / 2 || (fling && x > 0 && vx > 0)) {
-        switchMonth(-1);   // 右划过半 / 快速右扫 → 上个月
+      if (projected <= -threshold) {
+        switchMonth(1);    // 左划落点越过阈值 → 下个月
+      } else if (projected >= threshold) {
+        switchMonth(-1);   // 右划落点越过阈值 → 上个月
       } else {
         calTrack.style.transform = 'translateX(0)';   // 弹回本月
       }
