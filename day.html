@@ -414,7 +414,8 @@
     overflow: hidden;
     box-shadow: var(--shadowCard);
     animation: billIn 0.45s var(--ease);
-    transition: transform 0.4s var(--ease),
+    /* transform 用弹簧曲线：松手回弹灵动，贴近 iOS 相册按压手感 */
+    transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
                 opacity 0.32s var(--ease),
                 height 0.4s var(--ease),
                 margin-bottom 0.4s var(--ease),
@@ -438,21 +439,24 @@
   .bill:nth-child(6) { animation-delay: 0.23s; }
   .bill:nth-child(7) { animation-delay: 0.27s; }
   .bill:nth-child(8) { animation-delay: 0.31s; }
+  /* 按压反馈：快速下沉 + 阴影抬升（iOS 相册拾取感），松手按弹簧曲线弹回 */
   .bill:not(.expanded):not(.removing):active {
-    transform: scale(0.97);
-    box-shadow: 0 1px 2px rgba(21, 28, 46, 0.04);
-    transition: transform 0.15s var(--ease),
-                box-shadow 0.15s ease,
+    transform: scale(0.94);
+    box-shadow: 0 3px 8px rgba(21, 28, 46, 0.08), 0 16px 36px rgba(21, 28, 46, 0.14);
+    transition: transform 0.13s cubic-bezier(0.25, 0.1, 0.25, 1),
+                box-shadow 0.18s ease,
                 opacity 0.32s var(--ease),
                 height 0.4s var(--ease),
                 margin-bottom 0.4s var(--ease);
   }
+  /* 内容层：不透明背景盖住右侧操作按钮 —— 左滑/展开时按钮随位移“露出”，
+     天然渐进出现，不再有一闪而出的生硬感（iOS 邮件式） */
   .bill-main {
     display: flex;
     align-items: center;
     width: 100%;
     padding: 15px 16px 15px 18px;
-    background: transparent;
+    background: linear-gradient(180deg, #ffffff, #fbfaf7);
     position: relative;
     z-index: 2;
     transition: transform 0.4s var(--ease);
@@ -465,6 +469,11 @@
     opacity: 0;
     transform: translateX(-32px) scale(0.95);
     pointer-events: none;
+    /* 删除动画不用弹簧曲线，保持干脆利落的折叠 */
+    transition: transform 0.4s var(--ease),
+                opacity 0.32s var(--ease),
+                height 0.4s var(--ease),
+                margin-bottom 0.4s var(--ease);
   }
   @keyframes billIn {
     from { opacity: 0; transform: translateY(14px); }
@@ -478,9 +487,12 @@
     margin-right: 13px;
     flex-shrink: 0;
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+    transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .bill.expense .icon { background: var(--redSoft); }
   .bill.income  .icon { background: var(--greenSoft); }
+  /* 按压时图标轻微放大，交互反馈更有层次 */
+  .bill:not(.expanded):not(.removing):active .icon { transform: scale(1.12); }
   .bill .info { flex: 1; min-width: 0; }
   .bill .info .name {
     font-size: 16px; font-weight: 600;
@@ -508,21 +520,13 @@
   .bill.income  .num { color: var(--green); }
 
   /* 右侧操作层：左滑展开的编辑 / 删除 */
+  /* 操作按钮常态可见（iOS 邮件式通栏），平时被内容层盖住，随位移自然露出 */
   .bill-actions {
     position: absolute;
     top: 0; right: 0; bottom: 0;
     display: flex;
     z-index: 1;
-    opacity: 0;
-    transform: translateX(24px);
-    transition: opacity 0.35s var(--ease), transform 0.35s var(--ease);
   }
-  .bill.expanded .bill-actions,
-  .bill.swiping .bill-actions {
-    opacity: 1;
-    transform: translateX(0);
-  }
-  .bill.swiping .bill-actions { transition: none; }
   .bill-actions button {
     width: 84px; height: 100%;
     border: none; border-radius: 0;
@@ -1227,6 +1231,8 @@
     // 点击卡片主体：揭示/收起右侧删除（同时收起其他卡片）
     const main = e.target.closest('.bill-main');
     if (main) {
+      // 左滑/右滑结束后浏览器会补发一次合成 click：若刚拖拽过则忽略，展开只由轻点或左滑引起
+      if (Date.now() - dragEndTs < 600) return;
       const card = main.parentElement;
       const wasOpen = card.classList.contains('expanded');
       collapseAll();
@@ -1244,6 +1250,7 @@
   const SWIPE_THRESHOLD = 84; // 过半即吸附展开
 
   let swipe = null;   // { card, main, startX, startY, locked }
+let dragEndTs = 0;  // 最近一次拖拽结束的时间戳：用于屏蔽拖拽后浏览器补发的合成 click
 
   function setMainX(main, x, animate) {
     main.classList.toggle('dragging', !animate);
@@ -1287,6 +1294,7 @@
     if (!swipe) return;
     const { card, main, locked, base } = swipe;
     if (locked) {
+      dragEndTs = Date.now();                    // 拖拽结束：屏蔽随后补发的合成 click
       card.classList.remove('swiping');           // 清除拖拽态，交还给 .expanded 决定最终显隐
       // 过半吸附展开，否则弹回；同时淡入/淡出操作按钮
       if (base < -SWIPE_THRESHOLD) card.classList.add('expanded');
@@ -1348,6 +1356,7 @@
     if (!backDrag) return;
     const { locked, x } = backDrag;
     if (locked) {
+      dragEndTs = Date.now();   // 右划/拖拽结束：屏蔽随后补发的合成 click，避免误展开卡片
       const w = dayView.offsetWidth || 1;
       // 拖过 1/3 或快速轻扫（>60px）即返回
       const shouldBack = (x / w) > 0.33 || x > 60;
