@@ -648,6 +648,47 @@
     animation: clTitleIn 0.3s var(--ease) both;
   }
   @keyframes clTitleIn { from { opacity: 0; transform: translateY(-5px); } }
+  /* 日期分组卡：每日期一张，标题显示「日期 + 当日合计」，点击展开当日逐笔明细 */
+  .ddcard {
+    border-radius: 12px;
+    margin-top: 6px;
+    overflow: hidden;
+    background: #fbfaf8;
+    border: 0.5px solid rgba(21, 24, 31, 0.05);
+  }
+  .ddhead {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    /* 日期卡逐张错落入场 */
+    animation: miniIn 0.4s var(--ease) both;
+    transition: background 0.2s ease;
+  }
+  .ddhead:active { background: rgba(21, 24, 31, 0.05); }
+  .dddot {
+    width: 30px; height: 30px; border-radius: 9px;
+    background: var(--redSoft);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .dchem { font-size: 15px; }
+  .ddinfo { flex: 1; min-width: 0; }
+  .dddate { font-size: 14px; font-weight: 700; color: var(--ink); }
+  .ddsum {
+    font-size: 13px; font-weight: 800; color: var(--red);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  /* 当日逐笔明细：grid 行折叠手风琴，展开顺滑、可被其它点击打断 */
+  .ddbody {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.34s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .ddcard.open .ddbody { grid-template-rows: 1fr; }
+  .ddbody-inner { min-height: 0; overflow: hidden; padding: 0 8px 8px; }
+  .ddbody-inner .bill.mini + .bill.mini { margin-top: 4px; }
   /* 明细账单行：日视图卡片交互（左滑/点击露出编辑删除）的紧凑版 */
   .bill.mini {
     background: transparent;
@@ -1790,36 +1831,74 @@
       const catDef = CATEGORIES.expense.find(x => x.id === catId);
       const name = catDef ? catDef.name : '其他';
       const emoji = catDef ? catDef.emoji : '📦';
+      // ===== 明细按日期分组折叠：同一天合并为一张「日期合计卡」，新日期在上、旧日期在下 =====
+      // 轻量：默认只渲染日期卡（节点数 = 天数，而非账单笔数），大幅提升展开/加载速度
+      const byDate = new Map();
+      c.bills.forEach(b => {
+        if (!byDate.has(b.date)) byDate.set(b.date, []);
+        byDate.get(b.date).push(b);
+      });
+      const dateGroups = [...byDate.entries()]
+        .sort((a, b) => (a[0] > b[0] ? -1 : 1))   // 新日期在上
+        .map(([date, list]) => {
+          const sum = list.reduce((s, x) => s + x.amount, 0);
+          return { date, list, sum };
+        });
       chartDetailEl.innerHTML = `
       <div class="cl-detail-inner">
-        <div class="cl-detail-title">${name} · 共 ${c.bills.length} 笔</div>
-        ${c.bills.map(b => `
-          <div class="bill mini expense">
-            <div class="bill-actions">
-              <button class="swipe-edit" data-edit="${b.ts}">编辑</button>
-              <button class="swipe-del" data-del="${b.ts}">删除</button>
-            </div>
-            <div class="bill-main">
-              <div class="icon">${emoji}</div>
-              <div class="info">
-                <div class="name">${name}${b.note ? ' · ' + escapeHTML(b.note) : ''}</div>
-                <div class="time">${shortDate(b.date)} ${b.time}</div>
+        <div class="cl-detail-title">${name} · ${dateGroups.length} 天 · 共 ${c.bills.length} 笔</div>
+        ${dateGroups.map(g => `
+          <div class="ddcard" data-date="${g.date}">
+            <div class="ddhead">
+              <div class="dddot"><span class="dchem">${emoji}</span></div>
+              <div class="ddinfo">
+                <div class="dddate">${shortDate(g.date)}</div>
               </div>
-              <div class="num expense">-¥${b.amount.toFixed(2)}</div>
+              <div class="ddsum">-¥${g.sum.toFixed(2)}</div>
             </div>
+            <div class="ddbody"><div class="ddbody-inner">
+              ${g.list.map(b => `
+                <div class="bill mini expense">
+                  <div class="bill-actions">
+                    <button class="swipe-edit" data-edit="${b.ts}">编辑</button>
+                    <button class="swipe-del" data-del="${b.ts}">删除</button>
+                  </div>
+                  <div class="bill-main">
+                    <div class="icon">${emoji}</div>
+                    <div class="info">
+                      <div class="name">${name}${b.note ? ' · ' + escapeHTML(b.note) : ''}</div>
+                      <div class="time">${b.time}</div>
+                    </div>
+                    <div class="num expense">-¥${b.amount.toFixed(2)}</div>
+                  </div>
+                </div>`).join('')}
+            </div></div>
           </div>`).join('')}
       </div>`;
       chartDetailEl.classList.add('open');
       chartDetailEl.dataset.current = catId;
-      // ③ 明细卡逐条上滑错落入场
-      chartDetailEl.querySelectorAll('.bill.mini').forEach((b, i) => {
-        b.style.animationDelay = `${(i * 0.05).toFixed(2)}s`;
+      // ③ 日期卡逐张错落入场（轻量，仅天数），明细任其淡入
+      chartDetailEl.querySelectorAll('.ddhead').forEach((b, i) => {
+        b.style.animationDelay = `${(i * 0.04).toFixed(2)}s`;
       });
     }
   });
 
   // 消费构成明细：账单行的编辑 / 删除 / 点击展开（交互与日视图一致）
   chartDetailEl.addEventListener('click', e => {
+    // 点击日期卡标题 → 折叠/展开当日逐笔明细（手风琴，可被其它点击立刻打断）
+    const ddhead = e.target.closest('.ddhead');
+    if (ddhead) {
+      if (Date.now() - dragEndTs < 600) return;
+      const card = ddhead.closest('.ddcard');
+      if (!card) return;
+      card.classList.toggle('open', !card.classList.contains('open'));
+      // 展开其它已开卡：同一分区内保持单一展开
+      chartDetailEl.querySelectorAll('.ddcard.open').forEach(other => {
+        if (other !== card) other.classList.remove('open');
+      });
+      return;
+    }
     // 删除：折叠动画后移除，并同步刷新日视图与月视图（统计、日历随之更新）
     const delBtn = e.target.closest('[data-del]');
     if (delBtn) {
