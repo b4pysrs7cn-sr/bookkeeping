@@ -373,6 +373,9 @@
     display: flex;
     flex-direction: column;
     justify-content: flex-start;
+    /* iOS 顺滑折叠：min-height 与 grid 行一起过渡，卡片从有数据高度平滑收矮/长高 */
+    transition: min-height 0.45s cubic-bezier(0.32, 0.72, 0, 1),
+                grid-template-rows 0.45s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .chart-card.no-data .chart-stage { min-height: 0; }   /* 空态允许 grid 折叠收起 */
   /* 圆环用绝对定位 + transform 缩放：圆心从卡片中心水平滑到左侧，全程可插值，
@@ -620,6 +623,16 @@
     transform: translateY(0);
   }
   .chart-card.no-data .chart-detail { display: none; }
+  /* 切到空月时，图表内容（环/面板）先整体淡出，再让卡片收矮 —— 内容抽走后卡片顺势收拢。
+     仅设置最终态，沿用环/柱自带 opacity/transform 过渡，避免覆盖其原本动画曲线 */
+  .chart-card.no-data .chart-stage .chart-bars { opacity: 0; }
+  .chart-card.no-data .chart-stage .chart-ring {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.9);
+  }
+  /* 收尾弹簧：折叠/展开落定时卡片轻微回弹（iOS） */
+  .chart-card.rebound { animation: cardRebound 0.34s var(--ease); }
+  @keyframes cardRebound { 0% { transform: scale(1); } 40% { transform: scale(0.99); } 100% { transform: scale(1); } }
   /* 明细区：采用「一次定型高度 + 内部淡入」—— 不做会逐帧重排的高度动画，
      避免展开期间柱文/其它内容随之漂移导致无法交互；内部账单行自带 miniIn 错落淡入 */
   .chart-detail {
@@ -1791,7 +1804,15 @@
         ));
         await sleep(460 + arcs.length * 70);   // 等最晚一段画完（含级联延迟）
         if (!alive()) return;
+      } else {
+        // 空月：等折叠(0.45s)大体落定后追加一次 iOS 回弹，收尾柔和
+        await sleep(380);
+        if (!alive()) return;
       }
+      // 折叠/展开落定：整卡轻微回弹，收尾手感
+      card.classList.remove('rebound');
+      void card.offsetWidth;
+      card.classList.add('rebound');
       // 切月后一律停留默认折叠态（居中大圆环）：renderChart 已重建静态数据并移除
       // detail-open，无需恢复展开；无数据时 chart-body 的 grid 行折叠动画自动顺滑收矮
     })();
