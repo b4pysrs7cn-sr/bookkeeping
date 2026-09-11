@@ -368,23 +368,27 @@
   .chart-stage {
     position: relative;
     width: 100%;
-    min-height: 0;                 /* grid 折叠时允许行高收缩 */
-    display: flex; align-items: center;
+    min-height: 300px;            /* 有数据时保证高度，容纳居中大圆环 */
     overflow: hidden;
   }
+  .chart-card.no-data .chart-stage { min-height: 0; }   /* 空态允许 grid 折叠收起 */
+  /* 圆环用绝对定位 + transform 缩放：圆心从卡片中心水平滑到左侧，全程可插值，
+     避免 margin:auto 无法平滑过渡造成的跳变（iOS 捏合缩小手感）。
+     固定负 margin 让 300px 圆环中心对齐 left/top 参照点，transform 仅 scale 绕中心缩放 */
   .chart-ring {
-    position: relative;
+    position: absolute;
+    left: 50%; top: 50%;          /* 参照点：卡片几何中心 */
     width: 300px; height: 300px;
-    flex-shrink: 0;
-    margin: 0 auto;               /* 折叠：圆环居中 */
+    margin: -150px 0 0 -150px;    /* 圆环中心 = (left, top) */
+    transform-origin: center center;
+    transform: scale(1);          /* 折叠：居中大圆环 */
     cursor: pointer;
-    transition: width 0.55s cubic-bezier(0.32, 0.72, 0, 1),
-                height 0.55s cubic-bezier(0.32, 0.72, 0, 1),
-                margin 0.55s cubic-bezier(0.32, 0.72, 0, 1);
+    transition: transform 0.55s cubic-bezier(0.32, 0.72, 0, 1),
+                left 0.55s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .chart-card.detail-open .chart-ring {
-    width: 112px; height: 112px;
-    margin: 0;                    /* 展开：滑到最左侧 */
+    left: 56px;                   /* margin -150 已把盒左移150，left 直接=圆心 x=56px（112 环中心） */
+    transform: scale(0.373);      /* 300 → 112 */
   }
   .chart-ring svg { width: 100%; height: 100%; display: block; overflow: visible; }
   /* 环带弧段组：柔和投影，增强浮起层次（不影响引线与文字） */
@@ -454,33 +458,29 @@
   /* 展开态右侧面板：总金额突出在上，类别列表在下。
      折叠时宽度收为 0（不占位，圆环保持居中），展开时平滑展开到右侧 */
   .chart-panel {
-    flex: 1 0 auto; min-width: 0;
+    position: absolute;
+    top: 50%; right: 8px;
     max-width: 0;
     max-height: 0;
     overflow: hidden;
-    margin-left: 0;
     opacity: 0;
     pointer-events: none;
-    transform: translateX(26px);
+    transform: translateY(-50%) translateX(26px);
     transition: max-width 0.55s cubic-bezier(0.32, 0.72, 0, 1),
                 max-height 0.55s cubic-bezier(0.32, 0.72, 0, 1),
-                margin-left 0.55s cubic-bezier(0.32, 0.72, 0, 1),
                 opacity 0.35s var(--ease) 0.05s,
                 transform 0.5s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .chart-card.detail-open .chart-panel {
-    max-width: calc(100% - 130px);   /* 圆环 112 + 间隔 18 */
+    max-width: calc(100% - 140px);   /* 环 112 + 间隔，留出左缘 */
     max-height: 400px;
-    margin-left: 18px;
     opacity: 1;
     pointer-events: auto;
-    transform: translateX(0);
+    transform: translateY(-50%) translateX(0);
   }
   /* 切月动画加速：形态收起/恢复的过渡临时压缩到 0.3s，整体节奏 ~1.2s */
-  .chart-card.fast .chart-ring { transition-duration: 0.3s, 0.3s, 0.3s; }
-  .chart-card.fast .chart-panel {
-    transition-duration: 0.3s, 0.3s, 0.3s, 0.25s, 0.3s;
-  }
+  .chart-card.fast .chart-ring { transition-duration: 0.3s, 0.3s; }
+  .chart-card.fast .chart-panel { transition-duration: 0.3s, 0.3s, 0.25s, 0.3s; }
   .panel-total {
     font-size: 30px; font-weight: 800; color: var(--red);
     font-variant-numeric: tabular-nums;
