@@ -382,13 +382,16 @@
     margin: -150px 0 0 -150px;    /* 圆环中心 = (left, top) */
     transform-origin: center center;
     transform: scale(1);          /* 折叠：居中大圆环 */
+    opacity: 1;
     cursor: pointer;
     transition: transform 0.55s cubic-bezier(0.32, 0.72, 0, 1),
-                left 0.55s cubic-bezier(0.32, 0.72, 0, 1);
+                left 0.55s cubic-bezier(0.32, 0.72, 0, 1),
+                opacity 0.3s var(--ease);
   }
   .chart-card.detail-open .chart-ring {
-    left: 56px;                   /* margin -150 已把盒左移150，left 直接=圆心 x=56px（112 环中心） */
-    transform: scale(0.373);      /* 300 → 112；圆环保持垂直居中（top:50% 不变） */
+    left: 50%;                    /* 圆心留原位：整体淡出消失，让位柱状布局 */
+    transform: scale(0.82) translateY(-12px);   /* ① 分解：轻微上浮 + 径向淡出，像被"拆解"进柱条 */
+    opacity: 0;
   }
   .chart-ring svg { width: 100%; height: 100%; display: block; overflow: visible; }
   /* 环带弧段组：柔和投影，增强浮起层次（不影响引线与文字） */
@@ -433,11 +436,12 @@
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     text-align: center;
     pointer-events: none;
-    transition: opacity 0.35s var(--ease), transform 0.45s cubic-bezier(0.32, 0.72, 0, 1);
+    transition: opacity 0.3s var(--ease), transform 0.52s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .chart-card.detail-open .ring-center {
     opacity: 0;
-    transform: translate(30px, -22px) scale(0.85);
+    /* ① 接力动效：环内金额向环心收拢后径向左上角"飘飞"，与左上栏金额的淡入接续成同一数字飞走 */
+    transform: translate(-46px, -20px) scale(0.8);
   }
   .ring-total {
     font-size: 30px; font-weight: 800; color: var(--red);
@@ -455,94 +459,106 @@
     color: var(--ink3);
   }
 
-  /* 展开态右侧面板：总金额突出在上，类别列表在下。
-     贴合卡片上部、靠右出现，展开时平滑滑入（不再垂直居中） */
-  .chart-panel {
+  /* 展开态面板：顶部总金额（左上）+ 左柱右文行列表。
+     柱区窄、文字区显著更宽，保证类别名与金额完整显示 */
+  .chart-bars {
     position: absolute;
-    top: 6px; right: 8px;
-    max-width: 0;
-    max-height: 0;
-    overflow: hidden;
+    top: 6px; right: 8px; bottom: 6px; left: 8px;
+    display: flex; flex-direction: column;
     opacity: 0;
     pointer-events: none;
-    transform: translateX(26px);
-    transition: max-width 0.55s cubic-bezier(0.32, 0.72, 0, 1),
-                max-height 0.55s cubic-bezier(0.32, 0.72, 0, 1),
-                opacity 0.35s var(--ease) 0.05s,
-                transform 0.5s cubic-bezier(0.32, 0.72, 0, 1);
+    /* ① 面板从"环心"区域向上升起 + 轻微放大归位，仿佛由分解后的圆环重构而来 */
+    transform: translate(52px, 90px) scale(0.82);
+    transform-origin: top center;
+    transition: opacity 0.34s var(--ease) 0.04s,
+                transform 0.56s cubic-bezier(0.32, 0.72, 0, 1) 0.02s;
   }
-  .chart-card.detail-open .chart-panel {
-    max-width: calc(100% - 140px);   /* 环 112 + 间隔，留出左缘 */
-    max-height: 400px;
+  .chart-card.detail-open .chart-bars {
     opacity: 1;
     pointer-events: auto;
-    transform: translateX(0);
+    transform: translate(0, 0) scale(1);
   }
-  /* 切月动画加速：形态收起/恢复的过渡临时压缩到 0.3s，整体节奏 ~1.2s */
-  .chart-card.fast .chart-ring { transition-duration: 0.3s, 0.3s; }
-  .chart-card.fast .chart-panel { transition-duration: 0.3s, 0.3s, 0.25s, 0.3s; }
-  .panel-total {
-    font-size: 30px; font-weight: 800; color: var(--red);
+  /* 顶部：本月总金额，左对齐、视觉增强 */
+  .bars-head {
+    display: flex; align-items: baseline; gap: 8px;
+    margin-bottom: 8px; padding-left: 2px;
+  }
+  .bars-total {
+    font-size: 28px; font-weight: 800; color: var(--red);
     font-variant-numeric: tabular-nums;
-    line-height: 1.12;
+    line-height: 1.1;
     white-space: nowrap;
   }
-  .panel-total.small { font-size: 23px; }
-  .panel-total.tiny  { font-size: 17px; }
-  .panel-total.micro { font-size: 13px; }
-  .panel-label {
-    margin-top: 2px; margin-bottom: 8px;
+  .bars-total.small { font-size: 21px; }
+  .bars-total.tiny  { font-size: 16px; }
+  .bars-total.micro { font-size: 12px; }
+  .bars-label {
     font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
     color: var(--ink3);
   }
-  .chart-legend { min-width: 0; }
-  .cl-item {
-    display: flex; align-items: center; gap: 8px;
+  /* 行列表：高密度小行，一类别一行 */
+  .bars-list {
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* 一行 = 左侧横向柱 + 右侧文字（柱区窄、文字区宽） */
+  .brow {
+    display: flex; align-items: center; gap: 10px;
     width: 100%;
     border: none; background: transparent;
-    padding: 7px 6px;
+    padding: 7px 4px;
     border-radius: 12px;
     text-align: left;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     transition: background 0.2s ease, transform 0.18s var(--ease);
   }
-  .cl-item + .cl-item { margin-top: 2px; }
-  .cl-item:active { transform: scale(0.97); background: rgba(21, 28, 46, 0.05); }
-  .cl-dot {
-    width: 11px; height: 11px; border-radius: 50%;
-    flex-shrink: 0;
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6);
+  .brow + .brow { border-top: 0.5px solid var(--line2); }
+  .brow:active { transform: scale(0.98); background: rgba(21, 28, 46, 0.05); }
+  /* 左侧柱区：固定窄，柱长按占比；点击柱区返回大圆环 */
+  .bcol {
+    flex: 0 0 34%;
+    min-width: 0;
+    background: rgba(21, 28, 46, 0.06);
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
   }
-  .cl-main { flex: 1; min-width: 0; }
-  .cl-name {
-    display: block;
+  .bcol i {
+    display: block; height: 16px;
+    border-radius: 8px;
+    /* ① 柱条生长：折叠态 width 0，展开态过渡到行内的 --w（目标宽度），逐行错落入场 */
+    width: 0;
+    transition: width 0.62s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .chart-card.detail-open .bcol i { width: var(--w, 0%); }
+  /* 右侧文字区：更宽，类别名 + 金额，保证完整显示 */
+  .btxt {
+    flex: 1; min-width: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
+    /* ① 右文自右侧"滑入"：折叠态偏移 + 半透明，展开态回归右侧对位（延迟由 JS 按行设置） */
+    opacity: 0;
+    transform: translateX(16px);
+    transition: opacity 0.4s var(--ease), transform 0.5s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .chart-card.detail-open .btxt {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  .btxt .bname {
     font-size: 14px; font-weight: 600; color: var(--ink);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    line-height: 1.3;
   }
-  .cl-bar {
-    display: block;
-    height: 3px; border-radius: 2px;
-    background: rgba(21, 28, 46, 0.07);
-    margin-top: 4px;
-    overflow: hidden;
-  }
-  .cl-bar i {
-    display: block; height: 100%;
-    border-radius: 2px;
-    transition: width 0.5s var(--ease);
-  }
-  .cl-num {
+  .btxt .bnum {
     font-size: 14px; font-weight: 800; color: var(--ink);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     flex-shrink: 0;
   }
-  .cl-pct {
-    font-size: 11px; font-weight: 700; color: var(--ink3);
-    flex-shrink: 0; width: 42px; text-align: right;
-    font-variant-numeric: tabular-nums;
-  }
+  .btxt .bnum.small { font-size: 12px; }
+  .btxt .bnum.tiny  { font-size: 10.5px; }
   .chart-empty {
     padding: 6px 0 8px;
     text-align: center;
@@ -558,8 +574,15 @@
     transform: translateY(0);
   }
   .chart-card.no-data .chart-detail { display: none; }
-  /* 分类明细：0fr→1fr 平滑展开（iOS 弹性层） */
-  .chart-detail { margin-top: 8px; }
+  /* 固定底部明细区：容器用 grid 行折叠驱动整体展开，内部仍走 cl-detail 手风琴 */
+  .chart-detail {
+    margin-top: 8px;
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.4s cubic-bezier(0.32, 0.8, 0.25, 1);
+  }
+  .chart-detail.open { grid-template-rows: 1fr; }
+  .chart-detail > * { min-height: 0; overflow: hidden; }
   .cl-detail {
     display: grid;
     grid-template-rows: 0fr;
@@ -577,15 +600,20 @@
     padding: 8px 12px 6px;
     font-size: 11px; font-weight: 800; letter-spacing: 0.6px;
     color: var(--ink3);
+    /* ③ 展开明细：标题淡入下滑 */
+    animation: clTitleIn 0.3s var(--ease) both;
   }
+  @keyframes clTitleIn { from { opacity: 0; transform: translateY(-5px); } }
   /* 明细账单行：日视图卡片交互（左滑/点击露出编辑删除）的紧凑版 */
   .bill.mini {
     background: transparent;
     border: none; box-shadow: none;
     border-radius: 12px;
     margin-bottom: 0;
-    animation: none;
+    /* ③ 展开明细：各明细卡逐条上滑淡入（延迟由 JS 按行设置） */
+    animation: miniIn 0.42s var(--ease) both;
   }
+  @keyframes miniIn { from { opacity: 0; transform: translateY(10px); } }
   .bill.mini .bill-actions { border-radius: 12px; }
   .bill.mini .bill-main {
     background: #fff;
@@ -607,7 +635,7 @@
     .bill.mini .bill-main:hover { background: #faf9f7; }
   }
   @media (hover: hover) {
-    .cl-item:hover { background: rgba(21, 28, 46, 0.04); }
+    .brow:hover { background: rgba(21, 28, 46, 0.04); }
     .chart-card:hover { box-shadow: 0 2px 6px rgba(21, 28, 46, 0.05), 0 12px 30px rgba(21, 28, 46, 0.08); }
   }
 
@@ -1129,17 +1157,20 @@
         </div>
         <div class="chart-body">
           <div class="chart-stage">
-            <!-- 圆环：折叠时大号居中；展开后缩小滑到左侧 -->
+            <!-- 圆环：折叠时大号居中；展开后淡出，让位给下方柱状布局 -->
             <div class="chart-ring" id="chartRing"></div>
-            <!-- 右侧面板：展开态显示，总金额在右上 + 下方类别列表 -->
-            <div class="chart-panel" id="chartPanel">
-              <div class="panel-total" id="panelTotal">¥0.00</div>
-              <div class="panel-label">本月支出</div>
-              <div class="chart-legend" id="chartLegend"></div>
+            <!-- 展开态面板：顶部总金额 + 左柱右文行列表（柱区窄、文字区宽） -->
+            <div class="chart-bars" id="chartBars">
+              <div class="bars-head">
+                <span class="bars-total" id="barsTotal">¥0.00</span>
+                <span class="bars-label">本月支出</span>
+              </div>
+              <div class="bars-list" id="barsList"></div>
             </div>
           </div>
         </div>
         <div class="chart-empty" id="chartEmpty">本月还没有消费记录</div>
+        <!-- 固定底部明细区：点击文字行时手风琴展示对应分类的账明明细 -->
         <div class="chart-detail" id="chartDetail"></div>
       </div>
     </div>
@@ -1474,26 +1505,25 @@
   function renderChart() {
     const y = viewDate.getFullYear(), m = viewDate.getMonth();
     document.getElementById('chartSub').textContent = `${y}年${m + 1}月`;
-    const cats = monthCatData();
+    const cats = monthCatData();   // 已按金额降序
     const total = cats.reduce((s, c) => s + c.amount, 0);
     const card = document.getElementById('chartCard');
     const ring = document.getElementById('chartRing');
-    const legend = document.getElementById('chartLegend');
-    const panelTotal = document.getElementById('panelTotal');
+    const barsTotal = document.getElementById('barsTotal');
+    const barsList = document.getElementById('barsList');
     const detail = document.getElementById('chartDetail');
     card.classList.remove('detail-open');   // 数据重建后回到折叠态（大圆环居中）
     card.classList.toggle('no-data', !total);
     if (!total) {          // 本月无支出：只显示空态提示
-      ring.innerHTML = ''; legend.innerHTML = ''; detail.innerHTML = '';
-      panelTotal.textContent = '¥0.00';
+      ring.innerHTML = ''; barsList.innerHTML = ''; detail.innerHTML = '';
+      barsTotal.textContent = '¥0.00';
       return;
     }
 
-    // 环形图各分段：pathLength=100 按占比分段，段间留 0.35 空隙；
-    // dashoffset 负向累计 = 从顶部顺时针依次排布；中角 = 百分比 × 3.6 换算成角度
+    // ===== 大圆环（折叠态）生成：保持不变 =====
     const totalText = `¥${total.toFixed(2)}`;
-    const TX = 128, TY = 128;             // SVG 中心（viewBox 256×256）
-    let cumDeg = -90, cumPct = 0;         // 累计角度 / 累计占比（dashoffset 基准）
+    const TX = 128, TY = 128;
+    let cumDeg = -90, cumPct = 0;
     const ringHTML = cats.map(c => {
       const pct = c.amount / total * 100;
       const a0 = cumDeg, a1 = cumDeg + pct * 3.6;
@@ -1504,23 +1534,18 @@
       cumPct += pct;
       return { c, pct, x: Math.cos(mid), y: Math.sin(mid), seg, off };
     });
-
-    // 外圈占比标注布局：左右分列 + 纵向防重叠（饼图引线式排布）
-    // 同侧标签自上而下保持最小间距，杜绝相邻小类别文字互相遮挡
-    const LBL_R = 124;   // 标注自然纵向半径
-    const COL_X = 112;   // 引线终点横坐标（超出环带半径，纵向调整永不穿环）
-    const GAP = 17;      // 同侧标签最小纵向间距
+    const LBL_R = 124;
+    const COL_X = 112;
+    const GAP = 17;
     ringHTML.forEach(s => {
-      s.side = s.x >= 0 ? 1 : -1;          // 按弧段方位分左右两列
-      s.lblY = TY + LBL_R * s.y;          // 自然纵向位置（弧段中角方向）
+      s.side = s.x >= 0 ? 1 : -1;
+      s.lblY = TY + LBL_R * s.y;
     });
     [1, -1].forEach(side => {
       const col = ringHTML.filter(s => s.side === side).sort((a, b) => a.lblY - b.lblY);
       if (col.length < 2) return;
-      // 第一遍自上而下：挤到上一行下方
       for (let i = 1; i < col.length; i++)
         if (col[i].lblY < col[i - 1].lblY + GAP) col[i].lblY = col[i - 1].lblY + GAP;
-      // 触底回推：限制在 TY±LBL_R 内并自下而上收紧；顶部越界则整体下移
       const hi = TY + LBL_R, lo = TY - LBL_R;
       if (col[col.length - 1].lblY > hi) {
         col[col.length - 1].lblY = hi;
@@ -1529,7 +1554,6 @@
       }
       if (col[0].lblY < lo) col.forEach(s => s.lblY += lo - col[0].lblY);
     });
-
     ring.innerHTML = `<svg viewBox="0 0 256 256">
       <g class="rl-arc" transform="rotate(-90 128 128)">${ringHTML.map(s => `
         <circle cx="128" cy="128" r="79" fill="none"
@@ -1539,8 +1563,7 @@
       ${ringHTML.map((s, i) => {
         const color = CAT_COLORS[s.c.id] || '#8E8E93';
         const r1 = v => v.toFixed(1);
-        const d = (i * 0.045).toFixed(2);   // 级联延迟：按类别序号递增
-        // 引线三段：环缘锚点 → 径向肘点 → 标签列终点
+        const d = (i * 0.045).toFixed(2);
         const p1x = TX + 93 * s.x,  p1y = TY + 93 * s.y;
         const p2x = TX + 106 * s.x, p2y = TY + 106 * s.y;
         const p3x = TX + s.side * COL_X;
@@ -1560,55 +1583,37 @@
     </div>`;
     fitTotal(document.getElementById('ringTotal'));
 
-    // 展开态右上角总金额（重点突出）
-    panelTotal.textContent = totalText;
-    fitTotal(panelTotal);
+    // ===== 展开态：顶部总金额（左上） =====
+    barsTotal.textContent = totalText;
+    fitTotal(barsTotal);
 
-    // 类别列表：色点 + 名称 + 微型进度条 + 金额 + 占比，整行可点击展开明细
-    legend.innerHTML = cats.map(c => {
-      const pct = (c.amount / total) * 100;
+    // ===== 展开态：左柱右文行列表（按占比横柱；金额 <1000 完整 / >=1000 用 x.xk） =====
+    const maxAmt = cats[0].amount;   // 已降序，最大的在顶
+    barsList.innerHTML = cats.map((c, ri) => {
+      const cat = CATEGORIES.expense.find(x => x.id === c.id);
+      const name = cat ? `${cat.emoji} ${cat.name}` : '📦 其他';
+      const w = (c.amount / maxAmt * 100).toFixed(1);
+      // 金额格式化：<1000 保留小数，>=1000 折 x.xk
+      const numText = c.amount < 1000
+        ? `¥${c.amount.toFixed(c.amount % 1 ? 2 : 0)}`
+        : `¥${(c.amount / 1000).toFixed(1)}k`;
+      const ncls = numText.length > 7 ? ' tiny' : numText.length > 5 ? ' small' : '';
       return `
-      <button class="cl-item" data-cat="${c.id}">
-        <span class="cl-dot" style="background:${CAT_COLORS[c.id] || '#8E8E93'}"></span>
-        <span class="cl-main">
-          <span class="cl-name">${c.emoji} ${c.name}</span>
-          <span class="cl-bar"><i style="width:${pct.toFixed(1)}%"></i></span>
+      <button class="brow" data-cat="${c.id}">
+        <span class="bcol" title="点击返回大圆环"><i style="--w:${w}%;background:${CAT_COLORS[c.id] || '#8E8E93'}"></i></span>
+        <span class="btxt">
+          <span class="bname">${name}</span>
+          <span class="bnum${ncls}">${numText}</span>
         </span>
-        <span class="cl-num">¥${c.amount.toFixed(2)}</span>
-        <span class="cl-pct">${pct.toFixed(1)}%</span>
       </button>`;
     }).join('');
-
-    // 明细区：每个分类一栏，默认收起（点击图例后以 0fr→1fr 动画展开）
-    // 每笔账单复用日视图卡片结构（bill.mini）：左滑 / 点击都能露出编辑、删除
-    detail.innerHTML = cats.map(c => {
-      const cat = CATEGORIES.expense.find(x => x.id === c.id);
-      const name = cat ? cat.name : '其他';
-      const emoji = cat ? cat.emoji : '📦';
-      return `
-      <div class="cl-detail" data-detail="${c.id}">
-        <div class="cl-detail-wrap">
-          <div class="cl-detail-inner">
-            <div class="cl-detail-title">${name} · 共 ${c.bills.length} 笔</div>
-            ${c.bills.map(b => `
-              <div class="bill mini expense">
-                <div class="bill-actions">
-                  <button class="swipe-edit" data-edit="${b.ts}">编辑</button>
-                  <button class="swipe-del" data-del="${b.ts}">删除</button>
-                </div>
-                <div class="bill-main">
-                  <div class="icon">${emoji}</div>
-                  <div class="info">
-                    <div class="name">${name}${b.note ? ' · ' + escapeHTML(b.note) : ''}</div>
-                    <div class="time">${shortDate(b.date)} ${b.time}</div>
-                  </div>
-                  <div class="num expense">-¥${b.amount.toFixed(2)}</div>
-                </div>
-              </div>`).join('')}
-          </div>
-        </div>
-      </div>`;
-    }).join('');
+    // 柱条与右文逐行错落入场：行号越大延迟越大，形成自上而下的级联生长
+    barsList.querySelectorAll('.brow').forEach((row, i) => {
+      const col = row.querySelector('.bcol i');
+      const txt = row.querySelector('.btxt');
+      if (col) col.style.transitionDelay = `${(i * 0.05).toFixed(2)}s`;
+      if (txt) txt.style.transitionDelay = `${(i * 0.05 + 0.08).toFixed(2)}s`;
+    });
   }
 
   // ===== 切月消费构成过渡：收起 → 退场 → 重绘 → 进场 → 恢复（华为手环活动环风格） =====
@@ -1627,12 +1632,14 @@
 
     (async () => {
       card.classList.add('fast');                    // 加速形态过渡
-      // ⓪ 明细先收起：所有展开的分类明细（.cl-detail.open）与已展开的账单行
-      // （.bill.mini.expanded）触发 0fr→1fr 手风琴折叠并复位，与大环收起并行
-      const detailWasOpen = !!document.querySelector('#chartDetail .cl-detail.open');
+      // ⓪ 明细先收起：清空固定底部明细区（.chart-detail.open）与已展开的账单行
+      // （.bill.mini.expanded）触发手风琴折叠并复位，与大环收起并行
+      const detailWasOpen = !!document.getElementById('chartDetail')?.classList.contains('open');
       if (detailWasOpen) {
-        document.querySelectorAll('#chartDetail .cl-detail.open').forEach(d => d.classList.remove('open'));
-        document.querySelectorAll('#chartDetail .bill.mini.expanded').forEach(b => b.classList.remove('expanded'));
+        const dEl = document.getElementById('chartDetail');
+        dEl.classList.remove('open');
+        dEl.dataset.current = '';
+        dEl.innerHTML = '';
       }
       // ① 展开态先收起：圆环弹回居中（右上金额"飞回"环内是自然逆过程）
       // 明细折叠（0.4s）与大环收起（0.3s）并行，取较长者作为本步时长
@@ -1688,37 +1695,76 @@
     })();
   }
 
-  // 图例点击：手风琴式展开/收起该分类明细
-  document.getElementById('chartLegend').addEventListener('click', e => {
-    const item = e.target.closest('.cl-item');
-    if (!item) return;
-    const goOpen = !item.classList.contains('open');
-    // 收起其他分类，仅保留当前（整齐优先）
-    document.querySelectorAll('.cl-item.open').forEach(o => o.classList.remove('open'));
-    document.querySelectorAll('#chartDetail .cl-detail.open').forEach(d => d.classList.remove('open'));
-    if (goOpen) {
-      item.classList.add('open');
-      const target = document.querySelector(`#chartDetail .cl-detail[data-detail="${item.dataset.cat}"]`);
-      if (target) target.classList.add('open');
+  // ===== 展开态交互：点击大圆环进入；柱区返回大圆环；文字区展开分类明细 =====
+  const chartCardEl = document.getElementById('chartCard');
+  const barsPanel = document.getElementById('chartBars');
+  const chartDetailEl = document.getElementById('chartDetail');
+
+  // 展开 / 收起形态，并复位明细区
+  function setDetailOpen(open) {
+    chartCardEl.classList.toggle('detail-open', open);
+    if (!open) {                     // 收起时清空明细，画布完全归位
+      chartDetailEl.innerHTML = '';
+      chartDetailEl.classList.remove('open');
     }
+  }
+
+  // 点击大圆环 → 进入展开态（柱 + 文字）
+  document.getElementById('chartRing').addEventListener('click', e => {
+    if (!chartCardEl.classList.contains('detail-open')) setDetailOpen(true);
   });
 
-  // 点击圆环或卡片空白：切换形态（大圆环居中 ⇄ 圆环左移 + 右上突出总金额）
-  // 图例行 / 明细账单行的交互由各自处理器负责，不触发形态切换
-  const chartCardEl = document.getElementById('chartCard');
-  chartCardEl.addEventListener('click', e => {
-    if (e.target.closest('.cl-item') || e.target.closest('.cl-detail') || e.target.closest('.bill')) return;
-    chartCardEl.classList.toggle('detail-open');
-    // 收起形态时：同步收起所有分类明细与已展开的账单行，画布完全归位
-    if (!chartCardEl.classList.contains('detail-open')) {
-      document.querySelectorAll('.cl-item.open').forEach(o => o.classList.remove('open'));
-      document.querySelectorAll('#chartDetail .cl-detail.open').forEach(d => d.classList.remove('open'));
-      document.querySelectorAll('#chartDetail .bill.mini.expanded').forEach(b => b.classList.remove('expanded'));
+  // 展开态面板点击：柱区返回大圆环；文字区展开/切换分类明细
+  barsPanel.addEventListener('click', e => {
+    const col = e.target.closest('.bcol');
+    if (col) {                       // 点柱 → 返回大圆环
+      setDetailOpen(false);
+      return;
+    }
+    const brow = e.target.closest('.brow');
+    if (!brow) return;               // 面板空白不响应
+    const catId = brow.dataset.cat;
+    // 已展开的正是此分类 → 收起；否则渲染并切换为该分类明细
+    if (chartDetailEl.dataset.current === catId && chartDetailEl.classList.contains('open')) {
+      chartDetailEl.classList.remove('open');
+      chartDetailEl.dataset.current = '';
+      chartDetailEl.innerHTML = '';
+      return;
+    }
+    const c = monthCatData().find(x => x.id === catId);
+    if (c) {
+      const catDef = CATEGORIES.expense.find(x => x.id === catId);
+      const name = catDef ? catDef.name : '其他';
+      const emoji = catDef ? catDef.emoji : '📦';
+      chartDetailEl.innerHTML = `
+      <div class="cl-detail-inner">
+        <div class="cl-detail-title">${name} · 共 ${c.bills.length} 笔</div>
+        ${c.bills.map(b => `
+          <div class="bill mini expense">
+            <div class="bill-actions">
+              <button class="swipe-edit" data-edit="${b.ts}">编辑</button>
+              <button class="swipe-del" data-del="${b.ts}">删除</button>
+            </div>
+            <div class="bill-main">
+              <div class="icon">${emoji}</div>
+              <div class="info">
+                <div class="name">${name}${b.note ? ' · ' + escapeHTML(b.note) : ''}</div>
+                <div class="time">${shortDate(b.date)} ${b.time}</div>
+              </div>
+              <div class="num expense">-¥${b.amount.toFixed(2)}</div>
+            </div>
+          </div>`).join('')}
+      </div>`;
+      chartDetailEl.classList.add('open');
+      chartDetailEl.dataset.current = catId;
+      // ③ 明细卡逐条上滑错落入场
+      chartDetailEl.querySelectorAll('.bill.mini').forEach((b, i) => {
+        b.style.animationDelay = `${(i * 0.05).toFixed(2)}s`;
+      });
     }
   });
 
   // 消费构成明细：账单行的编辑 / 删除 / 点击展开（交互与日视图一致）
-  const chartDetailEl = document.getElementById('chartDetail');
   chartDetailEl.addEventListener('click', e => {
     // 删除：折叠动画后移除，并同步刷新日视图与月视图（统计、日历随之更新）
     const delBtn = e.target.closest('[data-del]');
