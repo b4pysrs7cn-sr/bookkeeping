@@ -502,28 +502,37 @@
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
-  /* 一行 = 左侧横向柱 + 右侧文字（柱区窄、文字区宽） */
+  /* 一行 = 左侧横向柱 + 右侧文字（左右区域无缝隙，分区清晰、互不串扰）。
+     左半整条为「柱区域」（点击返回大圆环），右半为「文字区域」（点击展开明细）。 */
   .brow {
-    display: flex; align-items: center; gap: 10px;
+    display: flex; align-items: center;
     width: 100%;
     border: none; background: transparent;
-    padding: 7px 4px;
+    padding: 0;
     border-radius: 12px;
     text-align: left;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
-    transition: background 0.2s ease, transform 0.18s var(--ease);
+    transition: background 0.2s ease;
   }
   .brow + .brow { border-top: 0.5px solid var(--line2); }
-  .brow:active { transform: scale(0.98); background: rgba(21, 28, 46, 0.05); }
-  /* 左侧柱区：固定窄，柱长按占比；点击柱区返回大圆环 */
+  /* 快速点击响应优化：按压不再整行位移（避免手指命中目标偏移），仅背景微亮反馈 */
+  .brow:active { background: rgba(21, 28, 46, 0.04); }
+  /* 左侧柱区域：占满整行左侧，内挂 6px 内边距撑出柱条位置；点击此处返回大圆环 */
   .bcol {
-    flex: 0 0 34%;
+    flex: 0 0 40%;
     min-width: 0;
-    background: rgba(21, 28, 46, 0.06);
-    border-radius: 8px;
-    overflow: hidden;
+    align-self: stretch;
+    padding: 9px 8px;
     cursor: pointer;
+    display: flex;
+    align-items: center;
+  }
+  .bcol .bcbar {
+    width: 100%; height: 16px;
+    border-radius: 8px;
+    background: rgba(21, 24, 31, 0.06);
+    overflow: hidden;
   }
   .bcol i {
     display: block; height: 16px;
@@ -533,20 +542,26 @@
     transition: width 0.62s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .chart-card.detail-open .bcol i { width: var(--w, 0%); }
-  /* 右侧文字区：更宽，类别名 + 金额，保证完整显示 */
+  /* 分隔线：柱区与文字区间的高亮竖线，强化两区视觉分界，本身不可交互 */
+  .bcol::after {
+    content: '';
+    width: 0.5px; height: 18px;
+    background: var(--line);
+    margin-left: 8px;
+  }
+  /* 右侧文字区域：占满整行右侧，可点击展开分类明细 */
   .btxt {
     flex: 1; min-width: 0;
+    align-self: stretch;
     display: flex; align-items: center; justify-content: space-between;
     gap: 12px;
+    padding: 9px 4px 9px 10px;
     /* ① 右文自右侧"滑入"：折叠态偏移 + 半透明，展开态回归右侧对位（延迟由 JS 按行设置） */
     opacity: 0;
     transform: translateX(16px);
     transition: opacity 0.4s var(--ease), transform 0.5s cubic-bezier(0.32, 0.72, 0, 1);
   }
-  .chart-card.detail-open .btxt {
-    opacity: 1;
-    transform: translateX(0);
-  }
+  .chart-card.detail-open .btxt { opacity: 1; transform: translateX(0); }
   .btxt .bname {
     font-size: 14px; font-weight: 600; color: var(--ink);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1600,7 +1615,7 @@
       const ncls = numText.length > 7 ? ' tiny' : numText.length > 5 ? ' small' : '';
       return `
       <button class="brow" data-cat="${c.id}">
-        <span class="bcol" title="点击返回大圆环"><i style="--w:${w}%;background:${CAT_COLORS[c.id] || '#8E8E93'}"></i></span>
+        <span class="bcol" title="点击返回大圆环"><span class="bcbar"><i style="--w:${w}%;background:${CAT_COLORS[c.id] || '#8E8E93'}"></i></span></span>
         <span class="btxt">
           <span class="bname">${name}</span>
           <span class="bnum${ncls}">${numText}</span>
@@ -1714,17 +1729,17 @@
     if (!chartCardEl.classList.contains('detail-open')) setDetailOpen(true);
   });
 
-  // 展开态面板点击：柱区返回大圆环；文字区展开/切换分类明细
+  // 展开态面板点击：柱区域返回大圆环；文字区域展开/切换分类明细
   barsPanel.addEventListener('click', e => {
-    const col = e.target.closest('.bcol');
-    if (col) {                       // 点柱 → 返回大圆环
+    // 严格左右分区：整行紧贴，柱区(.bcol)与文字区(.btxt)互不串扰
+    if (e.target.closest('.bcol')) {     // 点柱 → 返回大圆环
       setDetailOpen(false);
       return;
     }
     const brow = e.target.closest('.brow');
-    if (!brow) return;               // 面板空白不响应
+    if (!brow) return;                   // 面板空白不响应
     const catId = brow.dataset.cat;
-    // 已展开的正是此分类 → 收起；否则渲染并切换为该分类明细
+    // 已展开的正是此分类 → 收起
     if (chartDetailEl.dataset.current === catId && chartDetailEl.classList.contains('open')) {
       chartDetailEl.classList.remove('open');
       chartDetailEl.dataset.current = '';
@@ -1761,8 +1776,24 @@
       chartDetailEl.querySelectorAll('.bill.mini').forEach((b, i) => {
         b.style.animationDelay = `${(i * 0.05).toFixed(2)}s`;
       });
+      scrollDetailIntoView();   // 明细展开后自动上划到可视区，免手动滚动
     }
   });
+
+  // 明细展开 → 自动滚动，让明细区整体处于可视范围。目标：明细标题贴卡片视口，被收起的柱文顶部不被压出
+  let detailScrollTimer = null;
+  function scrollDetailIntoView() {
+    clearTimeout(detailScrollTimer);
+    // 等手风琴 grid 展开首帧稳定后的下一帧再滚，避免滚动到未定型高度
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const inner = chartDetailEl.querySelector('.cl-detail-inner');
+        if (!inner) return;
+        // 明细区自身若在卡片可视高度内，也把其顶部尽量贴近可视上缘；否则上抛整卡
+        inner.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      });
+    });
+  }
 
   // 消费构成明细：账单行的编辑 / 删除 / 点击展开（交互与日视图一致）
   chartDetailEl.addEventListener('click', e => {
