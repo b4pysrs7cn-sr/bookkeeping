@@ -620,15 +620,13 @@
     transform: translateY(0);
   }
   .chart-card.no-data .chart-detail { display: none; }
-  /* 固定底部明细区：容器用 grid 行折叠驱动整体展开，内部仍走 cl-detail 手风琴 */
+  /* 明细区：采用「一次定型高度 + 内部淡入」—— 不做会逐帧重排的高度动画，
+     避免展开期间柱文/其它内容随之漂移导致无法交互；内部账单行自带 miniIn 错落淡入 */
   .chart-detail {
     margin-top: 8px;
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows 0.4s cubic-bezier(0.32, 0.8, 0.25, 1);
+    display: block;
   }
-  .chart-detail.open { grid-template-rows: 1fr; }
-  .chart-detail > * { min-height: 0; overflow: hidden; }
+  .chart-detail > * { min-height: 0; }
   .cl-detail {
     display: grid;
     grid-template-rows: 0fr;
