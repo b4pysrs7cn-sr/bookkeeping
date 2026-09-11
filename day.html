@@ -286,19 +286,19 @@
   .calendar {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    gap: 6px;
+    gap: 5px;
     background: rgba(255, 255, 255, 0.5);
-    padding: 8px;
-    border-radius: 18px;
+    padding: 6px;
+    border-radius: 16px;
     border: 0.5px solid rgba(255, 255, 255, 0.8);
     box-shadow: var(--shadowCard);
   }
   .cal-cell {
     background: rgba(255, 255, 255, 0.92);
     border: 0.5px solid var(--line2);
-    border-radius: 12px;
-    height: 48px;                 /* 压缩格子高度：让消费构成卡片随日历上移更贴近 */
-    padding: 4px 2px;
+    border-radius: 11px;
+    height: 44px;                 /* 再压缩格子高度：让消费构成卡片随日历继续上移 */
+    padding: 3px 2px;
     text-align: center;
     cursor: pointer;
     display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
@@ -1169,8 +1169,9 @@
     .header { padding-top: max(18px, calc(10px + env(safe-area-inset-top))); padding-bottom: 14px; }
     .date-title { font-size: 19px; }
     .amount-item .value { font-size: 20px; }
-    .cal-cell { height: 44px; }    /* 矮屏：进一步压缩，让消费构成卡片尽量上移 */
-    .calendar { gap: 5px; padding: 8px; }
+    .cal-cell { height: 40px; }    /* 矮屏：进一步压缩，让消费构成卡片尽量上移 */
+    .cal-cell .day-num { font-size: 13px; }
+    .calendar { gap: 4px; padding: 6px; }
     .sheet { padding-top: 20px; }
     .amount-display { margin-bottom: 6px; padding-bottom: 6px; }
     .amount-display .input { font-size: 30px; min-height: 40px; }
@@ -1187,7 +1188,7 @@
     .date-title { font-size: 19px; }
     .amounts { gap: 6px 16px; }
     .list, .calendar-wrap { padding-left: 10px; padding-right: 10px; }
-    .cal-cell { height: 48px; border-radius: 11px; }
+    .cal-cell { height: 42px; border-radius: 10px; }
     .cal-cell .day-num { font-size: 13px; }
     .cat-grid { gap: 6px; }
     .cat-grid button { font-size: 10px; }
