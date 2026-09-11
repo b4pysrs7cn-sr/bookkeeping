@@ -370,6 +370,9 @@
     width: 100%;
     min-height: 300px;            /* 有数据时保证高度，容纳居中大圆环 */
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
   }
   .chart-card.no-data .chart-stage { min-height: 0; }   /* 空态允许 grid 折叠收起 */
   /* 圆环用绝对定位 + transform 缩放：圆心从卡片中心水平滑到左侧，全程可插值，
@@ -460,20 +463,26 @@
   }
 
   /* 展开态面板：顶部总金额（左上）+ 左柱右文行列表。
-     柱区窄、文字区显著更宽，保证类别名与金额完整显示 */
+     柱区窄、文字区显著更宽，保证类别名与金额完整显示。
+     面板为流式（非绝对），明细区作为其末项紧跟行列表下方，随类别数量/位置自然位移 */
   .chart-bars {
-    position: absolute;
-    top: 6px; right: 8px; bottom: 6px; left: 8px;
+    position: relative;
+    width: 100%;
     display: flex; flex-direction: column;
+    /* 折叠态收起：高 0 + 透明，不占位；展开态撑满内容高度（max-height 仅兜底） */
+    max-height: 0;
+    overflow: hidden;
     opacity: 0;
     pointer-events: none;
     /* ① 面板从"环心"区域向上升起 + 轻微放大归位，仿佛由分解后的圆环重构而来 */
     transform: translate(52px, 90px) scale(0.82);
     transform-origin: top center;
     transition: opacity 0.34s var(--ease) 0.04s,
-                transform 0.56s cubic-bezier(0.32, 0.72, 0, 1) 0.02s;
+                transform 0.56s cubic-bezier(0.32, 0.72, 0, 1) 0.02s,
+                max-height 0.55s cubic-bezier(0.32, 0.72, 0, 1);
   }
   .chart-card.detail-open .chart-bars {
+    max-height: 640px;               /* 兜底上限：行数极多时内部滚动，不撑爆卡片 */
     opacity: 1;
     pointer-events: auto;
     transform: translate(0, 0) scale(1);
@@ -481,7 +490,7 @@
   /* 顶部：本月总金额，左对齐、视觉增强 */
   .bars-head {
     display: flex; align-items: baseline; gap: 8px;
-    margin-bottom: 8px; padding-left: 2px;
+    margin-bottom: 8px; padding-top: 6px; padding-left: 2px;
   }
   .bars-total {
     font-size: 28px; font-weight: 800; color: var(--red);
@@ -496,11 +505,12 @@
     font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
     color: var(--ink3);
   }
-  /* 行列表：高密度小行，一类别一行 */
+  /* 行列表：高密度小行，一类别一行；超出视口时行列表自身滚动，明细始终紧随其后 */
   .bars-list {
     min-height: 0;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+    flex-shrink: 1;
   }
   /* 一行 = 左侧横向柱 + 右侧文字（左右区域无缝隙，分区清晰、互不串扰）。
      左半整条为「柱区域」（点击返回大圆环），右半为「文字区域」（点击展开明细）。 */
@@ -563,6 +573,7 @@
   }
   .chart-card.detail-open .btxt { opacity: 1; transform: translateX(0); }
   .btxt .bname {
+    flex: 1; min-width: 0;
     font-size: 14px; font-weight: 600; color: var(--ink);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
@@ -574,6 +585,14 @@
   }
   .btxt .bnum.small { font-size: 12px; }
   .btxt .bnum.tiny  { font-size: 10.5px; }
+  /* 类别占比：名称与金额之间的灰色小号百分数（保留一位小数） */
+  .btxt .bpct {
+    font-size: 12px; font-weight: 700; color: var(--ink3);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .btxt .bpct.tiny { font-size: 10.5px; }
   .chart-empty {
     padding: 6px 0 8px;
     text-align: center;
@@ -1172,21 +1191,23 @@
         </div>
         <div class="chart-body">
           <div class="chart-stage">
-            <!-- 圆环：折叠时大号居中；展开后淡出，让位给下方柱状布局 -->
+            <!-- 圆环：折叠时大号居中；展开后淡出，让位给柱状布局 -->
             <div class="chart-ring" id="chartRing"></div>
-            <!-- 展开态面板：顶部总金额 + 左柱右文行列表（柱区窄、文字区宽） -->
+            <!-- 展开态面板：顶部总金额 + 左柱右文行列表（柱区窄、文字区宽）；
+                 明细区为面板末项，flex 流排，直接位于柱与文字下方，随行数自动移位 -->
             <div class="chart-bars" id="chartBars">
               <div class="bars-head">
                 <span class="bars-total" id="barsTotal">¥0.00</span>
                 <span class="bars-label">本月支出</span>
               </div>
               <div class="bars-list" id="barsList"></div>
+              <!-- 分类明细：作为面板末尾的正常流子项，紧随柱文行列表下方 -->
+              <div class="chart-detail" id="chartDetail"></div>
             </div>
           </div>
         </div>
+        <!-- 空态提示：本月无支出时显示（位于卡片底部，独立于展开面板） -->
         <div class="chart-empty" id="chartEmpty">本月还没有消费记录</div>
-        <!-- 固定底部明细区：点击文字行时手风琴展示对应分类的账明明细 -->
-        <div class="chart-detail" id="chartDetail"></div>
       </div>
     </div>
   </div>
@@ -1581,15 +1602,17 @@
         const d = (i * 0.045).toFixed(2);
         const p1x = TX + 93 * s.x,  p1y = TY + 93 * s.y;
         const p2x = TX + 106 * s.x, p2y = TY + 106 * s.y;
-        const p3x = TX + s.side * COL_X;
+        const p3x = TX + s.side * (COL_X - 2);   // 引线终点略收于文字列，留白色 halo 间隙，避免压字
+        const txa = s.side > 0 ? 'start' : 'end';   // 右侧文字从左排；左侧从右排 → 都朝圆外延伸，避开引线
+        const txX = TX + s.side * COL_X;
         return `
       <polyline class="rl-line" pathLength="1" style="animation-delay:${d}s"
         points="${r1(p1x)},${r1(p1y)} ${r1(p2x)},${r1(p2y)} ${r1(p3x)},${r1(s.lblY)}"
         fill="none" stroke="${color}"></polyline>
       ${s.pct >= 3 ? `<circle class="rl-dot" style="animation-delay:${(+d + 0.3).toFixed(2)}s" cx="${r1(p1x)}" cy="${r1(p1y)}" r="2.6" fill="${color}"></circle>` : ''}
       <text class="rl-text" style="animation-delay:${(+d + 0.3).toFixed(2)}s"
-        x="${r1(TX + s.side * COL_X)}" y="${r1(s.lblY)}" dy="3.8"
-        text-anchor="middle">${s.pct.toFixed(1)}%</text>`;
+        x="${r1(txX)}" y="${r1(s.lblY)}" dy="3.8"
+        text-anchor="${txa}">${s.pct.toFixed(1)}%</text>`;
       }).join('')}
     </svg>
     <div class="ring-center">
@@ -1613,11 +1636,15 @@
         ? `¥${c.amount.toFixed(c.amount % 1 ? 2 : 0)}`
         : `¥${(c.amount / 1000).toFixed(1)}k`;
       const ncls = numText.length > 7 ? ' tiny' : numText.length > 5 ? ' small' : '';
+      // 百分数：保留一位小数
+      const pctText = (c.amount / total * 100).toFixed(1) + '%';
+      const pcls = pctText.length > 4 ? ' tiny' : '';
       return `
       <button class="brow" data-cat="${c.id}">
         <span class="bcol" title="点击返回大圆环"><span class="bcbar"><i style="--w:${w}%;background:${CAT_COLORS[c.id] || '#8E8E93'}"></i></span></span>
         <span class="btxt">
           <span class="bname">${name}</span>
+          <span class="bpct${pcls}">${pctText}</span>
           <span class="bnum${ncls}">${numText}</span>
         </span>
       </button>`;
