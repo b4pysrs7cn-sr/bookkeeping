@@ -680,13 +680,14 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap; flex-shrink: 0;
   }
-  /* 当日逐笔明细：grid 行折叠手风琴，展开顺滑、可被其它点击打断 */
+  /* 当日逐笔明细：点击日期卡手风琴展开；未展开时彻底隐藏并禁交互，
+     确保"未点开单日明细"时内部账单不可被点击 */
   .ddbody {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows 0.34s cubic-bezier(0.32, 0.72, 0, 1);
+    display: none;
+    grid-template-rows: 1fr;
   }
-  .ddcard.open .ddbody { grid-template-rows: 1fr; }
+  .ddcard.open .ddbody { display: grid; animation: ddbodyReveal 0.3s var(--ease); }
+  @keyframes ddbodyReveal { from { opacity: 0; transform: translateY(-4px); } }
   .ddbody-inner { min-height: 0; overflow: hidden; padding: 0 8px 8px; }
   .ddbody-inner .bill.mini + .bill.mini { margin-top: 4px; }
   /* 明细账单行：日视图卡片交互（左滑/点击露出编辑删除）的紧凑版 */
