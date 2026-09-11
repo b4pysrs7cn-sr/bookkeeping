@@ -492,6 +492,8 @@
     pointer-events: auto;
     transform: translate(0, 0) scale(1);
   }
+  /* 面板与明细不随外层 flex 压缩，各自按内容高度排布，明细稳定位于柱文区正下方 */
+  .chart-bars, .chart-detail { flex-shrink: 0; }
   /* 顶部：本月总金额，左对齐、视觉增强 */
   .bars-head {
     display: flex; align-items: baseline; gap: 8px;
@@ -1203,17 +1205,17 @@
           <div class="chart-stage">
             <!-- 圆环：折叠时大号居中；展开后淡出，让位给柱状布局 -->
             <div class="chart-ring" id="chartRing"></div>
-            <!-- 展开态面板：顶部总金额 + 左柱右文行列表（柱区窄、文字区宽）；
-                 明细区为面板末项，flex 流排，直接位于柱与文字下方，随行数自动移位 -->
+            <!-- 展开态面板：顶部总金额 + 左柱右文行列表（柱区窄、文字区宽） -->
             <div class="chart-bars" id="chartBars">
               <div class="bars-head">
                 <span class="bars-total" id="barsTotal">¥0.00</span>
                 <span class="bars-label">本月支出</span>
               </div>
               <div class="bars-list" id="barsList"></div>
-              <!-- 分类明细：作为面板末尾的正常流子项，紧随柱文行列表下方 -->
-              <div class="chart-detail" id="chartDetail"></div>
             </div>
+            <!-- 分类明细：位于柱与文字面板下方（stage 内正常流），随柱文行数/位置自然下移，
+                 不受 bars 面板 max-height/overflow 裁剪 -->
+            <div class="chart-detail" id="chartDetail"></div>
           </div>
         </div>
         <!-- 空态提示：本月无支出时显示（位于卡片底部，独立于展开面板） -->
