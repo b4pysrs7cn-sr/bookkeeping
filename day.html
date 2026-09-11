@@ -698,6 +698,12 @@
     /* ③ 展开明细：各明细卡逐条上滑淡入（延迟由 JS 按行设置） */
     animation: miniIn 0.42s var(--ease) both;
   }
+  /* 明细单日卡不因触碰/滑动而缩小：覆盖日视图 .bill 的按压缩放，
+     避免纵向滑动时整卡 scale 变形 */
+  .bill.mini:active,
+  .bill.mini.expanded:active,
+  .bill.mini.removing:active { transform: none; }
+  .bill.mini:active .icon { transform: scale(1); }   /* 图标同样不放大 */
   @keyframes miniIn { from { opacity: 0; transform: translateY(10px); } }
   .bill.mini .bill-actions { border-radius: 12px; }
   .bill.mini .bill-main {
@@ -1889,7 +1895,7 @@
     // 点击日期卡标题 → 折叠/展开当日逐笔明细（手风琴，可被其它点击立刻打断）
     const ddhead = e.target.closest('.ddhead');
     if (ddhead) {
-      if (Date.now() - dragEndTs < 600) return;
+      if (Date.now() - detailDragTs < 600) return;   // 刚滑动过：忽略合成 click，滑动不触发展开
       const card = ddhead.closest('.ddcard');
       if (!card) return;
       card.classList.toggle('open', !card.classList.contains('open'));
@@ -1923,10 +1929,11 @@
       startEdit(+editBtn.dataset.edit);
       return;
     }
-    // 点击账单行：展开 / 收起该行的编辑删除（屏蔽拖拽后的合成 click）
+    // 点击账单行：展开 / 收起该行的编辑删除（屏蔽拖拽后 / 纵向滑动后的合成 click）
     const main = e.target.closest('.bill-main');
     if (main) {
       if (Date.now() - dragEndTs < 600) return;
+      if (Date.now() - detailDragTs < 600) return;   // 明细区刚滑动过：忽略，滑动不触发缩小/展开
       const card = main.parentElement;
       card.classList.toggle('expanded', !card.classList.contains('expanded'));
       return;
@@ -2090,6 +2097,34 @@ let dragEndTs = 0;  // 最近一次拖拽结束的时间戳：用于屏蔽拖拽
     main.classList.toggle('dragging', !animate);
     main.style.transform = x === null ? '' : `translateX(${x}px)`;
   }
+
+  // 明细区滑动保护：纵向滚动 / 任何明显位移时记录 time，后续合成 click 被窗口期屏蔽，
+  // 避免滑动时误触发日期卡展开、单日卡展开或左滑按钮。轻点（tap）不受影响。
+  let detailDragTs = 0;
+  function bindDetailDragGuard(container) {
+    let ts = null;              // 本次触摸起点
+    let moved = false;
+    container.addEventListener('touchstart', e => {
+      ts = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      moved = false;
+    }, { passive: true });
+    container.addEventListener('touchmove', e => {
+      if (!ts) return;
+      const dx = e.touches[0].clientX - ts.x;
+      const dy = e.touches[0].clientY - ts.y;
+      if (Math.abs(dx) > 12 || Math.abs(dy) > 12) moved = true;   // 明显位移即视为滑动
+    }, { passive: true });
+    const onEnd = () => {
+      if (moved) detailDragTs = Date.now();   // 滑动结束：屏蔽紧随的合成 click
+      ts = null; moved = false;
+    };
+    container.addEventListener('touchend', onEnd, { passive: true });
+    container.addEventListener('touchcancel', onEnd, { passive: true });
+  }
+  // 消费构成明细区：滑动时日期卡 / 单日卡均不因触碰展开、缩小或露出编辑删除
+  bindDetailDragGuard(document.getElementById('chartDetail'));
+  // 供明细点击分支查询：是否刚发生过滑动
+  window.__detailDragTs = () => detailDragTs;
 
   // 让容器内的 .bill 卡片支持左滑跟手拖拽、松手吸附（iOS 邮件交互）
   // 日视图账单列表与消费构成明细共用同一套手势
