@@ -322,8 +322,13 @@
     margin-top: auto; margin-bottom: 2px;
     font-size: 9.5px; font-weight: 800; line-height: 1;
     white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
     padding: 2.5px 5px; border-radius: 7px;
+    transition: font-size 0.2s var(--ease);
   }
+  /* 金额略长：降档字号；很长（如 -1234.56）：再降一档，保证完整落在格子内 */
+  .cal-cell .day-net.small { font-size: 8.5px; padding: 2.5px 4px; }
+  .cal-cell .day-net.tiny  { font-size: 7.5px; padding: 2.5px 3px; }
   .day-net.pos { color: var(--green); background: var(--greenSoft); }
   .day-net.neg { color: var(--red); background: var(--redSoft); }
   .cal-cell.today .day-net.pos { color: #fff; background: rgba(255, 255, 255, 0.22); }
@@ -352,13 +357,20 @@
   .chart-title { font-size: 17px; font-weight: 800; color: var(--ink); letter-spacing: 0.2px; }
   .chart-sub  { font-size: 12px; font-weight: 600; color: var(--ink3); }
   /* 折叠态：大圆环居中占满卡片，环内显示总额，环外用引线标注各类别占比；
-     展开态：圆环顺滑移到左侧、内部清空，总额上移至右上方突出显示 */
-  .chart-body { position: relative; }
+     展开态：圆环顺滑移到左侧、内部清空，总额上移至右上方突出显示。
+     chart-body 用 grid 行折叠实现空态顺滑变矮 */
+  .chart-body {
+    position: relative;
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 0.45s cubic-bezier(0.32, 0.72, 0, 1);
+  }
   .chart-stage {
     position: relative;
     width: 100%;
-    min-height: 300px;
+    min-height: 0;                 /* grid 折叠时允许行高收缩 */
     display: flex; align-items: center;
+    overflow: hidden;
   }
   .chart-ring {
     position: relative;
@@ -397,10 +409,10 @@
   }
   @keyframes rl-in { from { opacity: 0; } }
   .rl-text {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 800;
     fill: var(--ink);
-    letter-spacing: 0.2px;
+    letter-spacing: 0.1px;
     font-variant-numeric: tabular-nums;
     /* 白色描边 halo：引线从文字下方穿过时被描边分隔，杜绝线与字重合 */
     paint-order: stroke;
@@ -464,6 +476,11 @@
     pointer-events: auto;
     transform: translateX(0);
   }
+  /* 切月动画加速：形态收起/恢复的过渡临时压缩到 0.3s，整体节奏 ~1.2s */
+  .chart-card.fast .chart-ring { transition-duration: 0.3s, 0.3s, 0.3s; }
+  .chart-card.fast .chart-panel {
+    transition-duration: 0.3s, 0.3s, 0.3s, 0.25s, 0.3s;
+  }
   .panel-total {
     font-size: 30px; font-weight: 800; color: var(--red);
     font-variant-numeric: tabular-nums;
@@ -523,17 +540,24 @@
   }
   .cl-pct {
     font-size: 11px; font-weight: 700; color: var(--ink3);
-    flex-shrink: 0; width: 34px; text-align: right;
+    flex-shrink: 0; width: 42px; text-align: right;
     font-variant-numeric: tabular-nums;
   }
   .chart-empty {
-    display: none;
-    padding: 34px 0 36px;
+    padding: 6px 0 8px;
     text-align: center;
     font-size: 13px; color: var(--ink3);
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity 0.35s var(--ease), transform 0.35s var(--ease);
   }
-  .chart-card.no-data .chart-body { display: none; }
-  .chart-card.no-data .chart-empty { display: block; }
+  /* 空态平滑折叠：chart-body 切到 grid 0fr 行高，圆环区顺滑收起（见上方 chart-body 定义） */
+  .chart-card.no-data .chart-body { grid-template-rows: 0fr; }
+  .chart-card.no-data .chart-empty {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .chart-card.no-data .chart-detail { display: none; }
   /* 分类明细：0fr→1fr 平滑展开（iOS 弹性层） */
   .chart-detail { margin-top: 8px; }
   .cl-detail {
@@ -1330,10 +1354,25 @@
       const dNet = net ? net.inc - net.exp : 0;
       const hasBills = !!net;
 
+      // 当日结余格式：<1000 完整显示（保精度），>=1000 折成 x.xk（保清爽），
+      // 先按两位小数四舍五入再判阈值，避免 999.999 进位后显示成 1000.00 的完整长串
+      let netText = '', netCls = '';
+      if (hasBills) {
+        const sign = dNet >= 0 ? '+' : '-';
+        const absR = Math.round(Math.abs(dNet) * 100);   // 分单位整数，等价保留两位小数
+        const abs = absR % 100
+          ? absR / 100
+          : Math.round(absR / 100);                      // 整数金额去掉 .00
+        netText = abs < 1000
+          ? sign + abs.toFixed(abs % 1 ? 2 : 0)
+          : sign + (abs / 1000).toFixed(1) + 'k';
+        netCls = netText.length > 7 ? ' tiny' : netText.length > 5 ? ' small' : '';
+      }
+
       html += `
         <div class="cal-cell ${dateStr === today ? 'today' : ''} ${dateStr > today ? 'future' : ''}" data-date="${dateStr}">
           <div class="day-num">${d}</div>
-          ${hasBills ? `<div class="day-net ${dNet >= 0 ? 'pos' : 'neg'}">${dNet >= 0 ? '+' : '-'}${Math.abs(dNet).toFixed(Math.abs(dNet) % 1 ? 2 : 0)}</div>` : ''}
+          ${hasBills ? `<div class="day-net ${dNet >= 0 ? 'pos' : 'neg'}${netCls}">${netText}</div>` : ''}
         </div>`;
     }
     const tail = 42 - firstWeekday - daysInMonth;
@@ -1345,7 +1384,8 @@
   }
 
   // 更新月视图标题与当月汇总（增量换页时单独调用，避免整月重绘）
-  function updateMonthHeader() {
+  // animate 为 true 时：消费构成卡走「收起→退场→重绘→进场→恢复」完整动画序列
+  function updateMonthHeader(animate) {
     saneViewDate();   // 渲染前自愈：即使 viewDate 被污染也不会显示"2194年"之类异常
     const y = viewDate.getFullYear();
     const m = viewDate.getMonth();
@@ -1364,7 +1404,11 @@
     mIncEl.textContent = mInc.toFixed(2);
     fitValue(mExpEl);
     fitValue(mIncEl);
-    renderChart();   // 月份变化（翻页/回到当前月）时同步刷新消费构成图
+    if (animate) {
+      transitionChart();   // 切月：消费构成手环式过渡动画
+    } else {
+      renderChart();       // 初始加载/跳月：静态渲染
+    }
   }
 
   function renderMonth() {
@@ -1507,7 +1551,7 @@
       ${s.pct >= 3 ? `<circle class="rl-dot" style="animation-delay:${(+d + 0.3).toFixed(2)}s" cx="${r1(p1x)}" cy="${r1(p1y)}" r="2.6" fill="${color}"></circle>` : ''}
       <text class="rl-text" style="animation-delay:${(+d + 0.3).toFixed(2)}s"
         x="${r1(TX + s.side * COL_X)}" y="${r1(s.lblY)}" dy="3.8"
-        text-anchor="middle">${Math.round(s.pct)}%</text>`;
+        text-anchor="middle">${s.pct.toFixed(1)}%</text>`;
       }).join('')}
     </svg>
     <div class="ring-center">
@@ -1531,7 +1575,7 @@
           <span class="cl-bar"><i style="width:${pct.toFixed(1)}%"></i></span>
         </span>
         <span class="cl-num">¥${c.amount.toFixed(2)}</span>
-        <span class="cl-pct">${pct.toFixed(0)}%</span>
+        <span class="cl-pct">${pct.toFixed(1)}%</span>
       </button>`;
     }).join('');
 
@@ -1565,6 +1609,83 @@
         </div>
       </div>`;
     }).join('');
+  }
+
+  // ===== 切月消费构成过渡：收起 → 退场 → 重绘 → 进场 → 恢复（华为手环活动环风格） =====
+  // 令牌机制：连续快速切月时新一轮立即作废旧一轮，动画不打架
+  let chartTransToken = 0;
+  function transitionChart() {
+    const myTok = ++chartTransToken;
+    const card = document.getElementById('chartCard');
+    const ring = document.getElementById('chartRing');
+    const wasExpanded = card.classList.contains('detail-open');   // 切月前形态
+    const HAD = !card.classList.contains('no-data');              // 旧月份是否有数据
+
+    // 各步骤用令牌判断是否已被新一轮抢占
+    const alive = () => chartTransToken === myTok;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    (async () => {
+      card.classList.add('fast');                    // 加速形态过渡
+      // ⓪ 明细先收起：所有展开的分类明细（.cl-detail.open）与已展开的账单行
+      // （.bill.mini.expanded）触发 0fr→1fr 手风琴折叠并复位，与大环收起并行
+      const detailWasOpen = !!document.querySelector('#chartDetail .cl-detail.open');
+      if (detailWasOpen) {
+        document.querySelectorAll('#chartDetail .cl-detail.open').forEach(d => d.classList.remove('open'));
+        document.querySelectorAll('#chartDetail .bill.mini.expanded').forEach(b => b.classList.remove('expanded'));
+      }
+      // ① 展开态先收起：圆环弹回居中（右上金额"飞回"环内是自然逆过程）
+      // 明细折叠（0.4s）与大环收起（0.3s）并行，取较长者作为本步时长
+      const foldAll = async () => {
+        if (wasExpanded) card.classList.remove('detail-open');
+        await sleep(detailWasOpen ? 420 : (wasExpanded ? 300 : 0));
+        return alive();
+      };
+      if (wasExpanded || detailWasOpen) {
+        if (!await foldAll()) return;
+      }
+      // ② 旧环（大环）逆时针收拢退场：逐段径向往回缩 + 整体淡出
+      if (HAD) {
+        const arcs = [...ring.querySelectorAll('.rl-arc circle')];
+        const fade = ring.animate(
+          [{ opacity: 1 }, { opacity: 0 }],
+          { duration: 320, easing: 'cubic-bezier(0.4, 0, 0.6, 1)', fill: 'forwards' }
+        );
+        arcs.forEach(c => c.animate(
+          [{ strokeDasharray: c.getAttribute('stroke-dasharray') || '100 0' },
+           { strokeDasharray: '0.2 99.8' }],
+          { duration: 320, easing: 'cubic-bezier(0.4, 0, 0.6, 1)', fill: 'forwards' }
+        ));
+        await sleep(360);
+        if (!alive()) return;
+      } else if (ring.animate) {
+        ring.animate([{ opacity: 1 }, { opacity: 0 }],
+          { duration: 140, easing: 'ease', fill: 'forwards' });
+        await sleep(160);
+        if (!alive()) return;
+      }
+      // ③ 重绘：瞬时换入新月份数据
+      renderChart();
+      // 先取消容器上残留的退场淡出动画（fill:forwards 会把 opacity 钉在 0），
+      // 否则新环会被隐形；弧段动画挂在旧 circle 上，已随 innerHTML 替换销毁
+      if (ring.getAnimations) ring.getAnimations().forEach(a => a.cancel());
+      if (!alive()) return;
+      card.classList.remove('fast');
+      const NEW = !card.classList.contains('no-data');
+      // ④ 新环逐段顺时针生长（每段从各自起点沿画向补足）+ 引线/文字由自身动画跟随
+      if (NEW) {
+        const arcs = [...ring.querySelectorAll('.rl-arc circle')];
+        arcs.forEach((c, i) => c.animate(
+          [{ strokeDasharray: '0.2 99.8' },
+           { strokeDasharray: c.getAttribute('stroke-dasharray') || '100 0' }],
+          { duration: 460, delay: i * 70, easing: 'cubic-bezier(0.2, 0.6, 0.3, 1)', fill: 'backwards' }
+        ));
+        await sleep(460 + arcs.length * 70);   // 等最晚一段画完（含级联延迟）
+        if (!alive()) return;
+      }
+      // 切月后一律停留默认折叠态（居中大圆环）：renderChart 已重建静态数据并移除
+      // detail-open，无需恢复展开；无数据时 chart-body 的 grid 行折叠动画自动顺滑收矮
+    })();
   }
 
   // 图例点击：手风琴式展开/收起该分类明细
@@ -2099,7 +2220,7 @@ let dragEndTs = 0;  // 最近一次拖拽结束的时间戳：用于屏蔽拖拽
       calCur.appendChild(calPrev.firstElementChild);
       calPrev.innerHTML = calHTML(m - 1 < 0 ? y - 1 : y, m - 1 < 0 ? 11 : m - 1, netMap);
     }
-    updateMonthHeader();
+    updateMonthHeader(true);   // 切月：消费构成卡走手环式过渡动画
 
     // 瞬时复位：换页前后视口内容一致（旧相邻页升为本月页），肉眼无感
     calTrack.classList.add('dragging');
