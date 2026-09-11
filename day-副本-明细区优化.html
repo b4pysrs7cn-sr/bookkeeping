@@ -1,0 +1,2742 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>单日记账（副本 · 明细区优化）</title>
+<!--
+  ════════════════════════════════════════════════════════════════════
+  本次改动说明（对应 git 提交 269983e）
+  【修复】明细区遮挡柱与文字：
+    · 根因：明细区 .chart-detail 之前嵌在 .chart-bars 内部，而
+      .chart-bars 设置了 overflow:hidden + max-height:640px。
+      明细展开后高度超出上限被裁剪，视觉上与柱/文字区域重叠。
+    · 修复：将 .chart-detail 从 .chart-bars 面板内移出，作为
+      chart-stage 内、.chart-bars 之后的正常流元素。
+      明细稳定位于柱与文字面板正下方，随柱文行数增加实时下移。
+    · 附加：为 .chart-bars 与 .chart-detail 加 flex-shrink:0，
+      防止外层 flex 压缩导致明细被压扁。
+  ════════════════════════════════════════════════════════════════════
+  -->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  :root {
+    --ink: #15181f;
+    --ink2: #646a7a;
+    --ink3: #9aa0ae;
+    --blue: #2e4cf2;
+    --blueDeep: #2236c9;
+    --blueSoft: rgba(46, 76, 242, 0.1);
+    --green: #0db972;
+    --greenSoft: rgba(13, 185, 114, 0.11);
+    --red: #ff4d57;
+    --redSoft: rgba(255, 77, 87, 0.1);
+    --line: rgba(21, 24, 31, 0.07);
+    --line2: rgba(21, 24, 31, 0.04);
+    --ease: cubic-bezier(0.32, 0.72, 0, 1);
+    --shadowCard: 0 1px 2px rgba(21, 28, 46, 0.05), 0 10px 28px rgba(21, 28, 46, 0.07);
+    --shadowFloat: 0 12px 30px rgba(35, 56, 207, 0.32);
+  }
+
+  body {
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+    background: #e9ebf0;
+    color: var(--ink);
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: manipulation;
+    display: flex;
+    justify-content: center;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* ===== 手机外框：暖瓷渐变 + 彩色氛围光晕 + 颗粒质感 ===== */
+  .phone {
+    width: 100%;
+    max-width: 420px;
+    height: 100vh;
+    height: 100dvh;
+    background: linear-gradient(180deg, #f5f3ee, #edeef2);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .phone::before {
+    content: '';
+    position: absolute; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(130% 62% at 88% -6%, rgba(46, 76, 242, 0.16), transparent 55%),
+      radial-gradient(120% 55% at -8% 110%, rgba(13, 185, 114, 0.12), transparent 58%),
+      radial-gradient(100% 46% at 118% 58%, rgba(255, 77, 87, 0.08), transparent 55%);
+  }
+  .phone::after {
+    content: '';
+    position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: 0.05;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.6 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* ===== 双视图切换：iOS 推入/弹出 + 视差 ===== */
+  .view {
+    position: absolute; inset: 0; z-index: 2;
+    display: flex; flex-direction: column;
+    pointer-events: none;
+    transition: transform 0.45s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .month-view { transform: translateX(0); pointer-events: auto; }
+  .month-view.pushed { transform: translateX(-28%); pointer-events: none; }
+  .month-view::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: #1b2140;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.45s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .month-view.pushed::after { opacity: var(--push-dim, 0.16); }
+  .month-view.dragging, .month-view.dragging::after { transition: none; }
+  .day-view.dragging { transition: none; will-change: transform; }
+
+  .day-view {
+    width: 100%;
+    background: linear-gradient(180deg, #f8f7f3, #f4f3ef);
+    overflow: hidden;
+    transform: translateX(106%);
+  }
+  .day-view.active { transform: translateX(0); pointer-events: auto; }
+
+  /* 进入时轻微上浮的序幕动画（只播一次） */
+  .month-view .header, .day-view .header { animation: rise 0.6s var(--ease) both; }
+  .month-view .calendar-wrap { animation: rise 0.7s var(--ease) 0.08s both; }
+  .day-view .list { animation: rise 0.6s var(--ease) 0.05s both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ===== 磨砂玻璃顶部栏 ===== */
+  .header {
+    position: relative; z-index: 3;
+    flex-shrink: 0;
+    background: linear-gradient(180deg, rgba(247, 246, 242, 0.8), rgba(247, 246, 242, 0.55));
+    backdrop-filter: blur(22px) saturate(1.5);
+    -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    padding: max(26px, calc(14px + env(safe-area-inset-top))) 20px 20px;
+    border-bottom: 0.5px solid var(--line);
+  }
+
+  /* ===== 月导航 ===== */
+  .month-nav { display: flex; align-items: center; gap: 12px; }
+  .month-title {
+    font-size: 24px; font-weight: 800; letter-spacing: 0.4px;
+    cursor: pointer; padding: 6px 10px; border-radius: 12px;
+    display: inline-flex; align-items: center; gap: 6px;
+    background: linear-gradient(120deg, var(--blueDeep), var(--blue));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    transition: transform 0.15s var(--ease);
+  }
+  .month-title:active { transform: scale(0.96); }
+  .picker-chevron {
+    font-size: 10px; color: var(--blue);
+    display: inline-block;
+    transition: transform 0.3s var(--ease);
+  }
+  .month-title.open .picker-chevron { transform: rotate(180deg); }
+  .nav-btn {
+    border: none;
+    width: 34px; height: 34px; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(8px);
+    color: var(--blue); font-size: 19px; line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(21, 28, 46, 0.06), 0 3px 10px rgba(21, 28, 46, 0.08);
+    transition: transform 0.15s var(--ease);
+  }
+  .nav-btn:active { transform: scale(0.88); }
+  @media (hover: hover) {
+    .nav-btn:hover, .back-btn:hover { transform: scale(1.06); }
+  }
+
+  /* ===== 年月选择器：玻璃 sheet ===== */
+  .ym-sheet-mask {
+    position: absolute; inset: 0;
+    background: rgba(22, 26, 40, 0.4);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.35s var(--ease);
+    z-index: 25;
+  }
+  .ym-sheet-mask.show { opacity: 1; pointer-events: auto; }
+  @supports (backdrop-filter: blur(4px)) {
+    .ym-sheet-mask.show { backdrop-filter: blur(8px); }
+  }
+  .ym-sheet {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(180deg, rgba(253, 252, 249, 0.98), rgba(247, 246, 242, 0.98));
+    backdrop-filter: blur(26px) saturate(1.4);
+    -webkit-backdrop-filter: blur(26px) saturate(1.4);
+    border-radius: 28px 28px 0 0;
+    padding: 14px 20px calc(20px + env(safe-area-inset-bottom));
+    transform: translateY(100%);
+    transition: transform 0.4s var(--ease);
+    z-index: 26;
+    max-height: 60%;
+    display: flex; flex-direction: column;
+    box-shadow: 0 -18px 44px rgba(21, 28, 46, 0.22);
+  }
+  .ym-sheet.show { transform: translateY(0); }
+  .ym-sheet::before {   /* 顶部拖拽把手 */
+    content: '';
+    position: absolute; top: 9px; left: 50%; transform: translateX(-50%);
+    width: 38px; height: 5px; border-radius: 3px;
+    background: rgba(21, 24, 31, 0.16);
+  }
+  .ym-handle { display: none; }
+  .ym-sheet-title {
+    text-align: center;
+    font-size: 13px; color: var(--ink3); font-weight: 700;
+    letter-spacing: 1px; margin-bottom: 10px;
+  }
+  .ym-sheet-body {
+    position: relative; flex: 1;
+    display: flex; gap: 10px;
+    min-height: 220px; overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 25%, #000 75%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 25%, #000 75%, transparent 100%);
+  }
+  .ym-sheet-body::before {
+    content: '';
+    position: absolute; left: 0; right: 0;
+    top: 50%; transform: translateY(-50%);
+    height: 44px;
+    background: linear-gradient(90deg, var(--blueSoft), rgba(46, 76, 242, 0.16), var(--blueSoft));
+    border-radius: 12px;
+    pointer-events: none; z-index: 2;
+  }
+  .ym-col {
+    flex: 1;
+    overflow-y: scroll;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    position: relative; z-index: 1;
+  }
+  .ym-col::-webkit-scrollbar { display: none; }
+  .ym-item {
+    height: 44px; line-height: 44px; text-align: center;
+    font-size: 16px; font-weight: 500; color: var(--ink);
+    transition: font-weight 0.15s, color 0.15s;
+  }
+  .ym-item.selected { color: var(--blue); font-weight: 800; font-size: 17.5px; }
+  .ym-item.today:not(.selected) { color: var(--blue); }
+  .ym-item:active { opacity: 0.7; }
+  .ym-spacer { height: 44px; line-height: 44px; color: transparent; pointer-events: none; }
+  .ym-sheet-actions {
+    display: flex; gap: 10px;
+    padding-top: 14px;
+    border-top: 0.5px solid var(--line);
+    margin-top: 10px;
+  }
+  .ym-btn {
+    flex: 1; border: none;
+    height: 42px; border-radius: 13px;
+    font-size: 15px; font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s var(--ease), opacity 0.15s;
+  }
+  .ym-btn:active { transform: scale(0.96); }
+  .ym-btn-cancel { background: rgba(21, 24, 31, 0.08); color: var(--ink); }
+  .ym-btn-today { background: var(--blueSoft); color: var(--blue); }
+  .ym-btn-confirm {
+    background: linear-gradient(180deg, #4d6bff, #2338cf);
+    color: #fff;
+    box-shadow: 0 8px 18px rgba(35, 56, 207, 0.32);
+  }
+
+  /* ===== 日历 ===== */
+  .calendar-wrap {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 16px 40px;
+    scrollbar-width: none;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+  }
+  .calendar-wrap::-webkit-scrollbar { display: none; }
+  .weekday-row {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    text-align: center;
+    font-size: 11px; font-weight: 700; letter-spacing: 1px;
+    color: var(--ink3);
+    margin-bottom: 10px;
+  }
+  .cal-viewport {
+    position: relative;
+    overflow: hidden;
+    contain: layout paint;
+    border-radius: 20px;
+  }
+  .cal-track {
+    display: grid;
+    grid-template-columns: 1fr;
+    transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+    will-change: transform;
+  }
+  .cal-track.dragging { transition: none; }
+  .cal-track .cal-page {
+    grid-area: 1 / 1;
+    min-height: 100%;
+    will-change: transform;
+  }
+  #calPrev { transform: translateX(-100%); }
+  #calCur  { transform: translateX(0); }
+  #calNext { transform: translateX(100%); }
+
+  .calendar {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 7px;
+    background: rgba(255, 255, 255, 0.5);
+    padding: 10px;
+    border-radius: 20px;
+    border: 0.5px solid rgba(255, 255, 255, 0.8);
+    box-shadow: var(--shadowCard);
+  }
+  .cal-cell {
+    background: rgba(255, 255, 255, 0.92);
+    border: 0.5px solid var(--line2);
+    border-radius: 14px;
+    height: 58px;
+    padding: 6px 3px;
+    text-align: center;
+    cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+    overflow: hidden;
+    box-shadow: 0 1px 0 #fff inset;
+    transition: transform 0.18s var(--ease), box-shadow 0.18s;
+  }
+  .cal-cell:active { transform: scale(0.9); }
+  .cal-cell.blank { background: transparent; cursor: default; border: none; box-shadow: none; }
+  .cal-cell.future { opacity: 0.45; background: rgba(255, 255, 255, 0.4); }
+  .cal-cell .day-num { font-size: 15px; font-weight: 700; line-height: 1.2; color: var(--ink); }
+  .cal-cell.today {
+    background: linear-gradient(155deg, #4565ff, #2338cf);
+    border: none;
+    box-shadow: 0 8px 20px rgba(35, 56, 207, 0.35);
+  }
+  .cal-cell.today .day-num { color: #fff; }
+  .cal-cell .day-net {
+    display: inline-flex; align-items: center;
+    max-width: 100%;
+    margin-top: auto; margin-bottom: 2px;
+    font-size: 9.5px; font-weight: 800; line-height: 1;
+    white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+    padding: 2.5px 5px; border-radius: 7px;
+    transition: font-size 0.2s var(--ease);
+  }
+  /* 金额略长：降档字号；很长（如 -1234.56）：再降一档，保证完整落在格子内 */
+  .cal-cell .day-net.small { font-size: 8.5px; padding: 2.5px 4px; }
+  .cal-cell .day-net.tiny  { font-size: 7.5px; padding: 2.5px 3px; }
+  .day-net.pos { color: var(--green); background: var(--greenSoft); }
+  .day-net.neg { color: var(--red); background: var(--redSoft); }
+  .cal-cell.today .day-net.pos { color: #fff; background: rgba(255, 255, 255, 0.22); }
+  .cal-cell.today .day-net.neg { color: #fff; background: rgba(0, 0, 0, 0.16); }
+  @media (hover: hover) {
+    .cal-cell:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(21, 28, 46, 0.08); }
+  }
+
+  /* ===== 消费构成统计（iOS 风格） ===== */
+  .chart-card {
+    position: relative;
+    margin-top: 14px;
+    padding: 18px 16px 14px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.55);
+    border: 0.5px solid rgba(255, 255, 255, 0.8);
+    box-shadow: var(--shadowCard);
+    animation: rise 0.6s var(--ease) both;
+    transition: box-shadow 0.3s ease, transform 0.3s ease;
+  }
+  .chart-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 14px;
+    padding: 0 2px;
+  }
+  .chart-title { font-size: 17px; font-weight: 800; color: var(--ink); letter-spacing: 0.2px; }
+  .chart-sub  { font-size: 12px; font-weight: 600; color: var(--ink3); }
+  /* 折叠态：大圆环居中占满卡片，环内显示总额，环外用引线标注各类别占比；
+     展开态：圆环顺滑移到左侧、内部清空，总额上移至右上方突出显示。
+     chart-body 用 grid 行折叠实现空态顺滑变矮 */
+  .chart-body {
+    position: relative;
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 0.45s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .chart-stage {
+    position: relative;
+    width: 100%;
+    min-height: 300px;            /* 有数据时保证高度，容纳居中大圆环 */
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+  .chart-card.no-data .chart-stage { min-height: 0; }   /* 空态允许 grid 折叠收起 */
+  /* 圆环用绝对定位 + transform 缩放：圆心从卡片中心水平滑到左侧，全程可插值，
+     避免 margin:auto 无法平滑过渡造成的跳变（iOS 捏合缩小手感）。
+     固定负 margin 让 300px 圆环中心对齐 left/top 参照点，transform 仅 scale 绕中心缩放 */
+  .chart-ring {
+    position: absolute;
+    left: 50%; top: 50%;          /* 参照点：卡片几何中心 */
+    width: 300px; height: 300px;
+    margin: -150px 0 0 -150px;    /* 圆环中心 = (left, top) */
+    transform-origin: center center;
+    transform: scale(1);          /* 折叠：居中大圆环 */
+    opacity: 1;
+    cursor: pointer;
+    /* 归位（返回大圆环）：iOS 相册式回弹 —— 缩放带轻微过冲，随惯性回稳，再整体浮现 */
+    transition: transform 0.5s cubic-bezier(0.34, 1.3, 0.64, 1),
+                left 0.5s cubic-bezier(0.34, 1.3, 0.64, 1),
+                opacity 0.25s var(--ease);
+  }
+  /* 展开方向：环被"拆解"进柱条，用干脆的平滑淡出，不过冲 */
+  .chart-card.detail-open .chart-ring {
+    left: 50%;                    /* 圆心留原位：整体淡出消失，让位柱状布局 */
+    transform: scale(0.82) translateY(-12px);   /* ① 分解：轻微上浮 + 径向淡出，像被"拆解"进柱条 */
+    opacity: 0;
+    transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1),
+                left 0.4s cubic-bezier(0.32, 0.72, 0, 1),
+                opacity 0.28s var(--ease);
+  }
+  .chart-ring svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  /* 环带弧段组：柔和投影，增强浮起层次（不影响引线与文字） */
+  .rl-arc { filter: drop-shadow(0 2px 6px rgba(21, 28, 46, 0.14)); }
+  /* 外圈类别占比标注：同色引线 + 环缘锚点 + 深色百分比
+     与环上弧段的关联由引线颜色和锚点承担；文字用深色保证可读 */
+  .rl-line {
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.78;
+    transition: opacity 0.3s var(--ease);
+    /* 入场：引线从环缘向外描画（pathLength=1 归一化，配合 dashoffset） */
+    stroke-dasharray: 1;
+    animation: rl-draw 0.5s var(--ease) backwards;
+  }
+  @keyframes rl-draw { from { stroke-dashoffset: 1; } }
+  .rl-dot, .rl-text {
+    transition: opacity 0.3s var(--ease);
+    /* 入场：等引线描画到位后淡入（延迟由内联样式按序递增，形成级联） */
+    animation: rl-in 0.4s var(--ease) 0.3s backwards;
+  }
+  @keyframes rl-in { from { opacity: 0; } }
+  .rl-text {
+    font-size: 10px;
+    font-weight: 800;
+    fill: var(--ink);
+    letter-spacing: 0.1px;
+    font-variant-numeric: tabular-nums;
+    /* 白色描边 halo：引线从文字下方穿过时被描边分隔，杜绝线与字重合 */
+    paint-order: stroke;
+    stroke: #f4f3ef;
+    stroke-width: 3px;
+    stroke-linejoin: round;
+  }
+  .chart-card.detail-open .rl-line,
+  .chart-card.detail-open .rl-dot,
+  .chart-card.detail-open .rl-text { opacity: 0; }
+  /* 环内金额：展开时向右上角方向淡出（与右上金额的滑入交叠，形成"飞过去"的连续感） */
+  .ring-center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center;
+    pointer-events: none;
+    transition: opacity 0.3s var(--ease), transform 0.52s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .chart-card.detail-open .ring-center {
+    opacity: 0;
+    /* ① 接力动效：环内金额向环心收拢后径向左上角"飘飞"，与左上栏金额的淡入接续成同一数字飞走 */
+    transform: translate(-46px, -20px) scale(0.8);
+  }
+  .ring-total {
+    font-size: 30px; font-weight: 800; color: var(--red);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    white-space: nowrap;
+    max-width: 150px;
+  }
+  .ring-total.small { font-size: 22px; }
+  .ring-total.tiny  { font-size: 16px; }
+  .ring-total.micro { font-size: 11.5px; }
+  .ring-label {
+    margin-top: 6px;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
+    color: var(--ink3);
+  }
+
+  /* 展开态面板：顶部总金额（左上）+ 左柱右文行列表。
+     柱区窄、文字区显著更宽，保证类别名与金额完整显示。
+     面板为流式（非绝对），明细区作为其末项紧跟行列表下方，随类别数量/位置自然位移 */
+  .chart-bars {
+    position: relative;
+    width: 100%;
+    display: flex; flex-direction: column;
+    /* 折叠态收起：高 0 + 透明，不占位；展开态撑满内容高度（max-height 仅兜底） */
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    /* ① 面板从"环心"区域向上升起 + 轻微放大归位，仿佛由分解后的圆环重构而来 */
+    transform: translate(52px, 90px) scale(0.82);
+    transform-origin: top center;
+    transition: opacity 0.34s var(--ease) 0.04s,
+                transform 0.56s cubic-bezier(0.32, 0.72, 0, 1) 0.02s,
+                max-height 0.55s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .chart-card.detail-open .chart-bars {
+    max-height: 640px;               /* 兜底上限：行数极多时内部滚动，不撑爆卡片 */
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(0, 0) scale(1);
+  }
+  /* 面板与明细不随外层 flex 压缩，各自按内容高度排布，明细稳定位于柱文区正下方 */
+  .chart-bars, .chart-detail { flex-shrink: 0; }
+  /* 顶部：本月总金额，左对齐、视觉增强 */
+  .bars-head {
+    display: flex; align-items: baseline; gap: 8px;
+    margin-bottom: 8px; padding-top: 6px; padding-left: 2px;
+  }
+  .bars-total {
+    font-size: 28px; font-weight: 800; color: var(--red);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+  .bars-total.small { font-size: 21px; }
+  .bars-total.tiny  { font-size: 16px; }
+  .bars-total.micro { font-size: 12px; }
+  .bars-label {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
+    color: var(--ink3);
+  }
+  /* 行列表：高密度小行，一类别一行；超出视口时行列表自身滚动，明细始终紧随其后 */
+  .bars-list {
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-shrink: 1;
+  }
+  /* 一行 = 左侧横向柱 + 右侧文字（左右区域无缝隙，分区清晰、互不串扰）。
+     左半整条为「柱区域」（点击返回大圆环），右半为「文字区域」（点击展开明细）。 */
+  .brow {
+    display: flex; align-items: center;
+    width: 100%;
+    border: none; background: transparent;
+    padding: 0;
+    border-radius: 12px;
+    text-align: left;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.2s ease;
+  }
+  .brow + .brow { border-top: 0.5px solid var(--line2); }
+  /* 快速点击响应优化：按压不再整行位移（避免手指命中目标偏移），仅背景微亮反馈 */
+  .brow:active { background: rgba(21, 28, 46, 0.04); }
+  /* 左侧柱区域：占满整行左侧，内挂 6px 内边距撑出柱条位置；点击此处返回大圆环 */
+  .bcol {
+    flex: 0 0 40%;
+    min-width: 0;
+    align-self: stretch;
+    padding: 9px 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+  }
+  .bcol .bcbar {
+    width: 100%; height: 16px;
+    border-radius: 8px;
+    background: rgba(21, 24, 31, 0.06);
+    overflow: hidden;
+  }
+  .bcol i {
+    display: block; height: 16px;
+    border-radius: 8px;
+    /* ① 柱条生长：折叠态 width 0，展开态过渡到行内的 --w（目标宽度），逐行错落入场 */
+    width: 0;
+    transition: width 0.62s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .chart-card.detail-open .bcol i { width: var(--w, 0%); }
+  /* 分隔线：柱区与文字区间的高亮竖线，强化两区视觉分界，本身不可交互 */
+  .bcol::after {
+    content: '';
+    width: 0.5px; height: 18px;
+    background: var(--line);
+    margin-left: 8px;
+  }
+  /* 右侧文字区域：占满整行右侧，可点击展开分类明细 */
+  .btxt {
+    flex: 1; min-width: 0;
+    align-self: stretch;
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 4px 9px 10px;
+    /* ① 右文自右侧"滑入"：折叠态偏移 + 半透明，展开态回归右侧对位（延迟由 JS 按行设置） */
+    opacity: 0;
+    transform: translateX(16px);
+    transition: opacity 0.4s var(--ease), transform 0.5s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .chart-card.detail-open .btxt { opacity: 1; transform: translateX(0); }
+  .btxt .bname {
+    flex: 1; min-width: 0;
+    font-size: 14px; font-weight: 600; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* 右侧固定组：百分数 + 金额，靠右对齐；百分数为固定宽度右拉齐，跨行竖直对齐于类别文字右侧 */
+  .btxt .bmeta {
+    flex-shrink: 0;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .btxt .bpct {
+    min-width: 44px;
+    text-align: right;
+    font-size: 12px; font-weight: 700; color: var(--ink3);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .btxt .bpct.tiny { font-size: 10.5px; }
+  .btxt .bnum {
+    font-size: 14px; font-weight: 800; color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+    text-align: right;
+  }
+  .btxt .bnum.small { font-size: 12px; }
+  .btxt .bnum.tiny  { font-size: 10.5px; }
+  .chart-empty {
+    padding: 6px 0 8px;
+    text-align: center;
+    font-size: 13px; color: var(--ink3);
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity 0.35s var(--ease), transform 0.35s var(--ease);
+  }
+  /* 空态平滑折叠：chart-body 切到 grid 0fr 行高，圆环区顺滑收起（见上方 chart-body 定义） */
+  .chart-card.no-data .chart-body { grid-template-rows: 0fr; }
+  .chart-card.no-data .chart-empty {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  .chart-card.no-data .chart-detail { display: none; }
+  /* 固定底部明细区：容器用 grid 行折叠驱动整体展开，内部仍走 cl-detail 手风琴 */
+  .chart-detail {
+    margin-top: 8px;
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.4s cubic-bezier(0.32, 0.8, 0.25, 1);
+  }
+  .chart-detail.open { grid-template-rows: 1fr; }
+  .chart-detail > * { min-height: 0; overflow: hidden; }
+  .cl-detail {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.34s cubic-bezier(0.32, 0.8, 0.25, 1);
+  }
+  .cl-detail.open { grid-template-rows: 1fr; }
+  .cl-detail > .cl-detail-wrap { min-height: 0; overflow: hidden; }
+  .cl-detail-inner {
+    padding: 4px 2px 8px;
+    border-radius: 14px;
+    background: #fff;
+    border: 0.5px solid rgba(255, 255, 255, 0.9);
+  }
+  .cl-detail-title {
+    padding: 8px 12px 6px;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.6px;
+    color: var(--ink3);
+    /* ③ 展开明细：标题淡入下滑 */
+    animation: clTitleIn 0.3s var(--ease) both;
+  }
+  @keyframes clTitleIn { from { opacity: 0; transform: translateY(-5px); } }
+  /* 明细账单行：日视图卡片交互（左滑/点击露出编辑删除）的紧凑版 */
+  .bill.mini {
+    background: transparent;
+    border: none; box-shadow: none;
+    border-radius: 12px;
+    margin-bottom: 0;
+    /* ③ 展开明细：各明细卡逐条上滑淡入（延迟由 JS 按行设置） */
+    animation: miniIn 0.42s var(--ease) both;
+  }
+  @keyframes miniIn { from { opacity: 0; transform: translateY(10px); } }
+  .bill.mini .bill-actions { border-radius: 12px; }
+  .bill.mini .bill-main {
+    background: #fff;
+    padding: 9px 10px 9px 12px;
+    border-radius: 12px;
+  }
+  .bill.mini .icon {
+    width: 32px; height: 32px;
+    border-radius: 10px;
+    font-size: 15px;
+    margin-right: 10px;
+  }
+  .bill.mini .info .name { font-size: 13.5px; }
+  .bill.mini .info .time { font-size: 10.5px; margin-top: 2px; }
+  .bill.mini .num { font-size: 13px; }
+  .bill.mini.expanded .bill-main { background: #f7f6f3; }
+  .bill.mini.expanded .icon { transform: scale(1); }
+  @media (hover: hover) {
+    .bill.mini .bill-main:hover { background: #faf9f7; }
+  }
+  @media (hover: hover) {
+    .brow:hover { background: rgba(21, 28, 46, 0.04); }
+    .chart-card:hover { box-shadow: 0 2px 6px rgba(21, 28, 46, 0.05), 0 12px 30px rgba(21, 28, 46, 0.08); }
+  }
+
+  /* ===== 日视图 ===== */
+  .day-header-row { display: flex; align-items: center; gap: 8px; }
+  .back-btn {
+    border: none;
+    background: rgba(255, 255, 255, 0.8);
+    color: var(--blue);
+    width: 34px; height: 34px; border-radius: 50%;
+    font-size: 22px; line-height: 1;
+    cursor: pointer;
+    margin-left: -8px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 2px rgba(21, 28, 46, 0.06), 0 3px 10px rgba(21, 28, 46, 0.08);
+    transition: transform 0.15s var(--ease), opacity 0.2s;
+  }
+  .back-btn:active { transform: scale(0.88); opacity: 0.7; }
+  .date-title { font-size: 21px; color: var(--ink); font-weight: 800; letter-spacing: 0.2px; line-height: 1.2; }
+  .today-chip {
+    display: inline-block;
+    font-size: 10px; font-weight: 700; color: #fff;
+    background: linear-gradient(120deg, var(--blue), var(--blueDeep));
+    border-radius: 20px; padding: 3px 9px;
+    margin-left: 4px; vertical-align: 2px;
+    box-shadow: 0 2px 8px rgba(46, 76, 242, 0.35);
+  }
+
+  /* ===== 上栏：收入 / 支出 / 结余 ===== */
+  .amounts { display: flex; flex-wrap: wrap; gap: 10px 26px; margin-top: 12px; }
+  .amount-item { min-width: 0; }
+  .amount-item .label {
+    font-size: 11px; font-weight: 700; letter-spacing: 1.2px;
+    color: var(--ink3);
+    line-height: 1;
+    margin-bottom: 5px;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .amount-item .label::before {
+    content: '';
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--blue); opacity: 0.85;
+  }
+  .amount-item.expense .label::before { background: var(--red); }
+  .amount-item.income  .label::before { background: var(--green); }
+  .amount-item .value {
+    font-size: 24px; font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+    white-space: nowrap;
+    transition: font-size 0.2s var(--ease);
+  }
+  .amount-item .value.small { font-size: 19px; }
+  .amount-item .value.tiny  { font-size: 15px; }
+  .amount-item.expense .value { color: var(--red); }
+  .amount-item.income  .value { color: var(--green); }
+
+  /* ===== 账单列表 ===== */
+  .list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 16px 120px;
+    scrollbar-width: none;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+  }
+  .list::-webkit-scrollbar { display: none; }
+  .empty {
+    text-align: center;
+    color: var(--ink3);
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    margin-top: 96px;
+    line-height: 2;
+    animation: billIn 0.45s var(--ease);
+  }
+  .bill {
+    background: linear-gradient(180deg, #ffffff, #fbfaf7);
+    border: 0.5px solid rgba(255, 255, 255, 0.8);
+    border-radius: 20px;
+    margin-bottom: 12px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: var(--shadowCard);
+    animation: billIn 0.45s var(--ease);
+    /* transform 用弹簧曲线：松手回弹灵动，贴近 iOS 相册按压手感 */
+    transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+                opacity 0.32s var(--ease),
+                height 0.4s var(--ease),
+                margin-bottom 0.4s var(--ease),
+                box-shadow 0.3s;
+  }
+  /* 左侧类型色条 */
+  .bill::before {
+    content: '';
+    position: absolute; left: 0; top: 14px; bottom: 14px;
+    width: 3px; border-radius: 3px;
+    z-index: 3; opacity: 0.9;
+  }
+  .bill.expense::before { background: var(--red); }
+  .bill.income::before  { background: var(--green); }
+  /* 新列表错落入场 */
+  .bill:nth-child(1) { animation-delay: 0.03s; }
+  .bill:nth-child(2) { animation-delay: 0.07s; }
+  .bill:nth-child(3) { animation-delay: 0.11s; }
+  .bill:nth-child(4) { animation-delay: 0.15s; }
+  .bill:nth-child(5) { animation-delay: 0.19s; }
+  .bill:nth-child(6) { animation-delay: 0.23s; }
+  .bill:nth-child(7) { animation-delay: 0.27s; }
+  .bill:nth-child(8) { animation-delay: 0.31s; }
+  /* 按压反馈：快速下沉 + 阴影抬升（iOS 相册拾取感），松手按弹簧曲线弹回 */
+  .bill:not(.expanded):not(.removing):active {
+    transform: scale(0.94);
+    box-shadow: 0 3px 8px rgba(21, 28, 46, 0.08), 0 16px 36px rgba(21, 28, 46, 0.14);
+    transition: transform 0.13s cubic-bezier(0.25, 0.1, 0.25, 1),
+                box-shadow 0.18s ease,
+                opacity 0.32s var(--ease),
+                height 0.4s var(--ease),
+                margin-bottom 0.4s var(--ease);
+  }
+  /* 内容层：不透明背景盖住右侧操作按钮 —— 左滑/展开时按钮随位移“露出”，
+     天然渐进出现，不再有一闪而出的生硬感（iOS 邮件式） */
+  .bill-main {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 15px 16px 15px 18px;
+    background: linear-gradient(180deg, #ffffff, #fbfaf7);
+    position: relative;
+    z-index: 2;
+    transition: transform 0.4s var(--ease);
+  }
+  .bill.expanded .bill-main { transform: translateX(-168px); }
+  .bill-main.dragging { transition: none; will-change: transform; }
+  .bill.removing {
+    height: 0;
+    margin-bottom: 0;
+    opacity: 0;
+    transform: translateX(-32px) scale(0.95);
+    pointer-events: none;
+    /* 删除动画不用弹簧曲线，保持干脆利落的折叠 */
+    transition: transform 0.4s var(--ease),
+                opacity 0.32s var(--ease),
+                height 0.4s var(--ease),
+                margin-bottom 0.4s var(--ease);
+  }
+  @keyframes billIn {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .bill .icon {
+    width: 44px; height: 44px;
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    margin-right: 13px;
+    flex-shrink: 0;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+    transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .bill.expense .icon { background: var(--redSoft); }
+  .bill.income  .icon { background: var(--greenSoft); }
+  /* 按压时图标轻微放大，交互反馈更有层次 */
+  .bill:not(.expanded):not(.removing):active .icon { transform: scale(1.12); }
+  .bill .info { flex: 1; min-width: 0; }
+  .bill .info .name {
+    font-size: 16px; font-weight: 600;
+    line-height: 1.35;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .bill .info .time {
+    font-size: 11.5px;
+    color: var(--ink3);
+    line-height: 1;
+    margin-top: 5px;
+    letter-spacing: 0.3px;
+  }
+  .bill .num {
+    font-size: 17px; font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-left: 8px;
+    transition: font-size 0.2s ease;
+  }
+  .bill .num.long  { font-size: 14px; }
+  .bill .num.xlong { font-size: 12px; }
+  .bill.expense .num { color: var(--red); }
+  .bill.income  .num { color: var(--green); }
+
+  /* 右侧操作层：左滑展开的编辑 / 删除 */
+  /* 操作按钮常态可见（iOS 邮件式通栏），平时被内容层盖住，随位移自然露出。
+     容器带与卡片一致的圆角并裁剪按钮，露出的按钮区右缘呈现圆角，与卡片层次统一 */
+  .bill-actions {
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    display: flex;
+    z-index: 1;
+    overflow: hidden;
+    border-radius: 20px;
+  }
+  .bill-actions button {
+    width: 84px; height: 100%;
+    border: none; border-radius: 0;
+    color: #fff;
+    font-size: 14px; font-weight: 600; letter-spacing: 0.5px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: filter 0.2s;
+  }
+  .bill-actions .swipe-edit { background: linear-gradient(180deg, #565e72, #3f4556); }
+  .bill-actions .swipe-del  { background: linear-gradient(180deg, #ff6b74, #f43e49); }
+  .bill-actions button:active { filter: brightness(0.88); }
+
+  /* ===== 加号按钮 ===== */
+  .fab {
+    position: absolute;
+    right: 20px;
+    bottom: calc(28px + env(safe-area-inset-bottom));
+    width: 62px; height: 62px;
+    border-radius: 50%;
+    border: none;
+    color: #fff;
+    font-size: 33px; font-weight: 300;
+    cursor: pointer;
+    z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(140deg, #4d6bff 0%, #3349e8 55%, #2338cf 100%);
+    box-shadow: 0 12px 28px rgba(35, 56, 207, 0.38), 0 3px 8px rgba(21, 28, 46, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    transition: transform 0.3s var(--ease), opacity 0.3s, visibility 0.3s;
+    animation: fabIn 0.5s var(--ease);
+  }
+  .fab::after {   /* 呼吸光环 */
+    content: '';
+    position: absolute; inset: -6px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(77, 107, 255, 0.25);
+    animation: fabPulse 2.6s ease-out infinite;
+  }
+  .fab:active { transform: scale(0.86); }
+  .fab.hide { opacity: 0; visibility: hidden; pointer-events: none; transform: scale(0.5); }
+  @keyframes fabPulse {
+    0% { transform: scale(0.92); opacity: 1; }
+    70%, 100% { transform: scale(1.35); opacity: 0; }
+  }
+  @keyframes fabIn {
+    from { opacity: 0; transform: scale(0.5); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+
+  /* ===== 遮罩 ===== */
+  .mask {
+    position: absolute; inset: 0;
+    background: rgba(22, 26, 40, 0.4);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.35s var(--ease);
+    z-index: 20;
+  }
+  .mask.show { opacity: 1; pointer-events: auto; }
+  @supports (backdrop-filter: blur(4px)) {
+    .mask.show { backdrop-filter: blur(8px); }
+  }
+
+  /* ===== 记账面板：玻璃 sheet + 数字键盘 ===== */
+  .sheet {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    padding: 26px 20px calc(20px + env(safe-area-inset-bottom));
+    max-height: 100%;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    transform: translateY(105%);
+    transition: transform 0.44s var(--ease);
+    z-index: 30;
+    background: linear-gradient(180deg, rgba(253, 252, 249, 0.98), rgba(247, 246, 242, 0.98));
+    backdrop-filter: blur(26px) saturate(1.4);
+    -webkit-backdrop-filter: blur(26px) saturate(1.4);
+    border-radius: 28px 28px 0 0;
+    border-top: 0.5px solid rgba(255, 255, 255, 0.85);
+    box-shadow: 0 -18px 44px rgba(21, 28, 46, 0.22);
+  }
+  .sheet.show { transform: translateY(0); }
+  .sheet::before {   /* 顶部拖拽把手 */
+    content: '';
+    position: absolute; top: 9px; left: 50%; transform: translateX(-50%);
+    width: 38px; height: 5px; border-radius: 3px;
+    background: rgba(21, 24, 31, 0.16);
+  }
+  .sheet-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .type-toggle { display: flex; background: rgba(21, 24, 31, 0.07); border-radius: 12px; padding: 3px; gap: 2px; }
+  .type-toggle button {
+    border: none; background: transparent;
+    padding: 7px 20px; font-size: 14px; font-weight: 600;
+    border-radius: 9px; color: var(--ink3);
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: all 0.25s var(--ease);
+  }
+  .type-toggle button.active-expense { background: #fff; color: var(--red); font-weight: 800; box-shadow: 0 2px 8px rgba(21, 28, 46, 0.12); }
+  .type-toggle button.active-income  { background: #fff; color: var(--green); font-weight: 800; box-shadow: 0 2px 8px rgba(21, 28, 46, 0.12); }
+  .close-btn {
+    border: none;
+    background: rgba(21, 24, 31, 0.08);
+    color: var(--ink2);
+    width: 32px; height: 32px; border-radius: 50%;
+    font-size: 13px; cursor: pointer;
+    transition: transform 0.15s var(--ease);
+  }
+  .close-btn:active { transform: scale(0.88); }
+
+  /* 金额显示 */
+  .amount-display {
+    display: flex; align-items: center;
+    margin-bottom: 10px;
+    padding: 0 4px 10px;
+    border-bottom: 0.5px solid var(--line);
+  }
+  .amount-display .symbol { font-size: 26px; font-weight: 800; color: var(--ink3); margin-right: 6px; }
+  .amount-display .input {
+    font-size: 38px; font-weight: 900;
+    font-variant-numeric: tabular-nums;
+    min-height: 48px;
+    white-space: nowrap; overflow: hidden;
+    color: var(--ink);
+    transition: font-size 0.15s ease;
+  }
+  .amount-display.expense-mode .input,
+  .amount-display.expense-mode .symbol { color: var(--red); }
+  .amount-display.income-mode .input,
+  .amount-display.income-mode .symbol { color: var(--green); }
+  .amount-display .caret {
+    width: 2px; height: 38px;
+    background: var(--blue);
+    animation: blink 1s steps(1) infinite;
+    display: none;
+  }
+  .amount-display.show-caret .caret { display: block; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* 分类选择 */
+  .cat-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 9px;
+    margin: 14px 0;
+  }
+  .cat-grid button {
+    border: 1px solid var(--line2);
+    position: relative;
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 15px;
+    padding: 9px 0 7px;
+    font-size: 11px;
+    color: var(--ink);
+    cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    box-shadow: 0 1px 0 #fff inset;
+    transition: all 0.25s var(--ease);
+  }
+  .cat-grid button .emoji { font-size: 21px; line-height: 1; }
+  .cat-grid button:active { transform: scale(0.92); }
+  .cat-grid button.selected {
+    background: linear-gradient(155deg, #465ff5, #2338cf);
+    color: #fff;
+    border-color: transparent;
+    transform: translateY(-1px) scale(1.03);
+    box-shadow: 0 8px 18px rgba(35, 56, 207, 0.32);
+  }
+  .cat-grid button.selected::after {
+    content: '✓';
+    position: absolute; top: 4px; right: 6px;
+    font-size: 10px; font-weight: 900;
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .note-input {
+    width: 100%;
+    border: none;
+    background: rgba(21, 24, 31, 0.055);
+    border-radius: 13px;
+    padding: 12px 14px;
+    font-size: 14px;
+    margin-bottom: 14px;
+    outline: none;
+    color: var(--ink);
+    box-shadow: inset 0 1.5px 3px rgba(21, 28, 46, 0.05);
+    -webkit-user-select: text; user-select: text;
+  }
+  .note-input::placeholder { color: var(--ink3); }
+
+  /* 键盘 */
+  .keypad {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .keypad button {
+    border: none;
+    border-radius: 17px;
+    padding: 17px 0;
+    font-size: 22px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    background: linear-gradient(180deg, #ffffff, #f3f4f7);
+    color: var(--ink);
+    cursor: pointer;
+    box-shadow: 0 1px 1px rgba(21, 28, 46, 0.06), 0 4px 10px rgba(21, 28, 46, 0.05), inset 0 1px 0 #fff;
+    transition: transform 0.1s var(--ease), filter 0.15s;
+  }
+  .keypad button:active { transform: translateY(1px) scale(0.96); filter: brightness(0.96); }
+  .keypad .fn { background: linear-gradient(180deg, #eceef3, #e2e5ec); font-size: 16px; color: var(--ink2); }
+  .keypad .save {
+    grid-row: span 2;
+    background: linear-gradient(180deg, #4d6bff, #2338cf);
+    color: #fff;
+    font-size: 17px; font-weight: 800; letter-spacing: 1px;
+    box-shadow: 0 8px 20px rgba(35, 56, 207, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  }
+  .keypad .save:disabled {
+    background: linear-gradient(180deg, #c9d0ef, #b9c2ea);
+    box-shadow: none;
+  }
+
+  /* ===== 自适应：矮屏（小屏手机 / 横屏）压缩布局 ===== */
+  @media (max-height: 700px) {
+    .header { padding-top: max(18px, calc(10px + env(safe-area-inset-top))); padding-bottom: 14px; }
+    .date-title { font-size: 19px; }
+    .amount-item .value { font-size: 20px; }
+    .cal-cell { height: 50px; }
+    .calendar { gap: 5px; padding: 8px; }
+    .sheet { padding-top: 20px; }
+    .amount-display { margin-bottom: 6px; padding-bottom: 6px; }
+    .amount-display .input { font-size: 30px; min-height: 40px; }
+    .cat-grid button { padding: 6px 0 5px; }
+    .cat-grid button .emoji { font-size: 18px; }
+    .keypad button { padding: 11px 0; font-size: 19px; }
+    .note-input { padding: 9px 12px; margin-bottom: 10px; }
+    .fab { width: 54px; height: 54px; font-size: 29px; }
+  }
+
+  /* ===== 自适应：超窄屏（≤350px） ===== */
+  @media (max-width: 350px) {
+    .header { padding-left: 14px; padding-right: 14px; }
+    .date-title { font-size: 19px; }
+    .amounts { gap: 6px 16px; }
+    .list, .calendar-wrap { padding-left: 10px; padding-right: 10px; }
+    .cal-cell { height: 48px; border-radius: 11px; }
+    .cal-cell .day-num { font-size: 13px; }
+    .cat-grid { gap: 6px; }
+    .cat-grid button { font-size: 10px; }
+    .keypad { gap: 7px; }
+    .fab { right: 14px; }
+    .sheet { padding-left: 14px; padding-right: 14px; }
+  }
+
+  /* ===== 自适应：横屏时避开左右刘海 ===== */
+  @media (orientation: landscape) {
+    .header {
+      padding-left: calc(20px + env(safe-area-inset-left));
+      padding-right: calc(20px + env(safe-area-inset-right));
+    }
+    .list, .calendar-wrap {
+      padding-left: calc(16px + env(safe-area-inset-left));
+      padding-right: calc(16px + env(safe-area-inset-right));
+    }
+    .fab { right: calc(20px + env(safe-area-inset-right)); }
+    .sheet {
+      padding-left: calc(20px + env(safe-area-inset-left));
+      padding-right: calc(20px + env(safe-area-inset-right));
+    }
+    .ym-sheet {
+      padding-left: calc(20px + env(safe-area-inset-left));
+      padding-right: calc(20px + env(safe-area-inset-right));
+    }
+  }
+</style>
+</head>
+<body>
+<div class="phone">
+
+  <!-- ===== 月视图 ===== -->
+  <div class="view month-view active" id="monthView">
+    <div class="header">
+      <div class="month-nav">
+        <button class="nav-btn" id="prevMonth">‹</button>
+        <div class="month-title" id="monthTitle">
+          2026年9月
+          <span class="picker-chevron">▼</span>
+        </div>
+        <button class="nav-btn" id="nextMonth">›</button>
+      </div>
+      <div class="amounts">
+        <div class="amount-item expense">
+          <div class="label">支出</div>
+          <div class="value" id="monthExpense">0.00</div>
+        </div>
+        <div class="amount-item income">
+          <div class="label">收入</div>
+          <div class="value" id="monthIncome">0.00</div>
+        </div>
+      </div>
+    </div>
+    <div class="calendar-wrap" id="calendarWrap">
+      <div class="weekday-row">
+        <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+      </div>
+      <div class="cal-viewport">
+        <div class="cal-track" id="calTrack">
+          <div class="cal-page" id="calPrev"></div>
+          <div class="cal-page" id="calCur"><div class="calendar" id="calendar"></div></div>
+          <div class="cal-page" id="calNext"></div>
+        </div>
+      </div>
+      <!-- 当月消费构成统计（iOS 风格环形图，点击图例展开分类明细） -->
+      <div class="chart-card" id="chartCard">
+        <div class="chart-head">
+          <span class="chart-title">消费构成</span>
+          <span class="chart-sub" id="chartSub"></span>
+        </div>
+        <div class="chart-body">
+          <div class="chart-stage">
+            <!-- 圆环：折叠时大号居中；展开后淡出，让位给柱状布局 -->
+            <div class="chart-ring" id="chartRing"></div>
+            <!-- 展开态面板：顶部总金额 + 左柱右文行列表（柱区窄、文字区宽） -->
+            <div class="chart-bars" id="chartBars">
+              <div class="bars-head">
+                <span class="bars-total" id="barsTotal">¥0.00</span>
+                <span class="bars-label">本月支出</span>
+              </div>
+              <div class="bars-list" id="barsList"></div>
+            </div>
+            <!-- 分类明细：位于柱与文字面板下方（stage 内正常流），随柱文行数/位置自然下移，
+                 不受 bars 面板 max-height/overflow 裁剪 -->
+            <div class="chart-detail" id="chartDetail"></div>
+          </div>
+        </div>
+        <!-- 空态提示：本月无支出时显示（位于卡片底部，独立于展开面板） -->
+        <div class="chart-empty" id="chartEmpty">本月还没有消费记录</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 日视图 ===== -->
+  <div class="view day-view" id="dayView">
+    <div class="header">
+      <div class="day-header-row">
+        <button class="back-btn" id="backBtn">‹</button>
+        <div class="date-title" id="dateTitle"></div>
+      </div>
+      <div class="amounts">
+        <div class="amount-item expense">
+          <div class="label">支出</div>
+          <div class="value" id="totalExpense">0.00</div>
+        </div>
+        <div class="amount-item income">
+          <div class="label">收入</div>
+          <div class="value" id="totalIncome">0.00</div>
+        </div>
+        <div class="amount-item">
+          <div class="label">当日结余</div>
+          <div class="value" id="dayNet">0.00</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="list" id="list"></div>
+
+    <button class="fab" id="fab" aria-label="记一笔">+</button>
+  </div>
+
+  <!-- 遮罩 -->
+  <div class="mask" id="mask"></div>
+
+  <!-- 年月快捷选择器 -->
+  <div class="ym-sheet-mask" id="ymMask"></div>
+  <div class="ym-sheet" id="ymSheet">
+    <div class="ym-handle"></div>
+    <div class="ym-sheet-title">选择年月</div>
+    <div class="ym-sheet-body">
+      <div class="ym-col" id="ymYears"></div>
+      <div class="ym-col" id="ymMonths"></div>
+    </div>
+    <div class="ym-sheet-actions">
+      <button class="ym-btn ym-btn-today" id="ymToday">今天</button>
+      <button class="ym-btn ym-btn-cancel" id="ymCancel">取消</button>
+      <button class="ym-btn ym-btn-confirm" id="ymConfirm">确定</button>
+    </div>
+  </div>
+
+  <!-- 数字键盘面板 -->
+  <div class="sheet" id="sheet">
+    <div class="sheet-top">
+      <div class="type-toggle">
+        <button id="btnExpense" class="active-expense" onclick="setType('expense')">支出</button>
+        <button id="btnIncome" onclick="setType('income')">收入</button>
+      </div>
+      <button class="close-btn" onclick="closeSheet()">✕</button>
+    </div>
+
+    <div class="amount-display expense-mode show-caret" id="amountDisplay">
+      <span class="symbol">¥</span>
+      <span class="input" id="amountInput">0</span>
+      <span class="caret"></span>
+    </div>
+
+    <div class="cat-grid" id="catGrid"></div>
+
+    <input class="note-input" id="noteInput" placeholder="点击填写备注..." maxlength="20" autocomplete="off">
+
+    <div class="keypad" id="keypad">
+      <button data-key="7">7</button>
+      <button data-key="8">8</button>
+      <button data-key="9">9</button>
+      <button class="fn" data-key="del">⌫</button>
+      <button data-key="4">4</button>
+      <button data-key="5">5</button>
+      <button data-key="6">6</button>
+      <button class="fn" data-key="clear">清空</button>
+      <button data-key="1">1</button>
+      <button data-key="2">2</button>
+      <button data-key="3">3</button>
+      <button class="save" id="saveBtn" data-key="save">保存</button>
+      <button data-key="0">0</button>
+      <button data-key="00">00</button>
+      <button data-key=".">.</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // ===== 数据层（localStorage 封装，便于以后迁移后端） =====
+  const STORE_KEY = 'dayBills';
+  function loadBills() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }
+    catch { return []; }
+  }
+  function saveBills(bills) {
+    localStorage.setItem(STORE_KEY, JSON.stringify(bills));
+  }
+
+  function todayStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+  function formatCN(dateStr) {
+    const [y, m, d] = dateStr.split('-');
+    return `${y}年${+m}月${+d}日`;
+  }
+
+  // ===== 状态 =====
+  let bills = loadBills();
+  let curDate = todayStr();      // 日视图当前日期
+  let viewDate = new Date();     // 月视图当前查看的年月
+  let curType = 'expense';   // 记账时选择收入或支出
+  let amount = '0';          // 金额用字符串操作
+  let curCat = null;         // 当前选中的分类
+
+  // ===== 分类（贴合大学生消费场景） =====
+  const CATEGORIES = {
+    expense: [
+      { id: 'food',    emoji: '🍚', name: '餐饮' },
+      { id: 'study',   emoji: '📚', name: '学习' },
+      { id: 'traffic', emoji: '🚌', name: '交通' },
+      { id: 'medical', emoji: '💊', name: '医药' },
+      { id: 'daily',   emoji: '🧴', name: '日用' },
+      { id: 'shop',    emoji: '🛍️', name: '购物' },
+      { id: 'fun',     emoji: '🎮', name: '娱乐' },
+      { id: 'social',  emoji: '🍻', name: '社交' },
+      { id: 'bill',    emoji: '💡', name: '水电' },
+      { id: 'other',   emoji: '📦', name: '其他' },
+    ],
+    income: [
+      { id: 'allowance', emoji: '🏠', name: '生活费' },
+      { id: 'parttime',  emoji: '💼', name: '兼职' },
+      { id: 'scholar',   emoji: '🏆', name: '奖学金' },
+      { id: 'redpack',   emoji: '🧧', name: '红包' },
+      { id: 'other',     emoji: '📦', name: '其他' },
+    ]
+  };
+
+  function renderCategories() {
+    const grid = document.getElementById('catGrid');
+    grid.innerHTML = CATEGORIES[curType].map(c => `
+      <button data-cat="${c.id}" class="${curCat === c.id ? 'selected' : ''}">
+        <span class="emoji">${c.emoji}</span><span>${c.name}</span>
+      </button>
+    `).join('');
+  }
+
+  document.getElementById('catGrid').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-cat]');
+    if (!btn) return;
+    curCat = btn.dataset.cat;
+    renderCategories();
+  });
+
+  // ===== 视图切换 =====
+  const dayView = document.getElementById('dayView');
+  const monthView = document.getElementById('monthView');
+  const calTrack = document.getElementById('calTrack');
+
+  function showDay() {
+    renderDay();
+    monthView.classList.add('pushed');
+    dayView.classList.add('active');
+  }
+  function showMonth() {
+    // 回到当前所查看日期所在的月份（点了相邻月日期后返回，月视图跟着切换）
+    const [y, m] = String(curDate).split('-').map(Number);
+    // 解析校验：仅接受合理年月（防污染的 curDate 把 viewDate 带到异常年份）
+    if (Number.isInteger(y) && y >= 2000 && y <= 2100 &&
+        Number.isInteger(m) && m >= 1 && m <= 12) {
+      viewDate = new Date(y, m - 1, 1);
+    } else {
+      const t = new Date();   // 异常则回到今天所在月
+      viewDate = new Date(t.getFullYear(), t.getMonth(), 1);
+    }
+    renderMonth();
+    dayView.classList.remove('active');
+    monthView.classList.remove('pushed');
+  }
+
+  // ===== 月视图渲染 =====
+  // 汇总一次：日期 → 当日收/支（避免每个日历格全量扫描账单，切换大数据量也丝滑）
+  function buildNetMap() {
+    const map = {};
+    bills.forEach(b => {
+      const e = map[b.date] || (map[b.date] = { exp: 0, inc: 0 });
+      b.type === 'expense' ? e.exp += b.amount : e.inc += b.amount;
+    });
+    return map;
+  }
+
+  // 单月日历：每月固定 6 周（42 格）网格，首尾以空白格补齐——
+  // 高度恒定保证切换动画丝滑；只显示本月份，月份之间界限清晰
+  function calHTML(y, m, netMap) {
+    const today = todayStr();
+    const daysInMonth = new Date(y, m + 1, 0).getDate();      // '0 号' 技巧
+    const firstWeekday = new Date(y, m, 1).getDay();
+    const prefix = `${y}-${String(m + 1).padStart(2, '0')}`;
+    let html = '<div class="calendar">';
+    for (let i = 0; i < firstWeekday; i++) {
+      html += '<div class="cal-cell blank"></div>';   // 1 号前的空白
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${prefix}-${String(d).padStart(2, '0')}`;
+      const net = netMap[dateStr];
+      const dNet = net ? net.inc - net.exp : 0;
+      const hasBills = !!net;
+
+      // 当日结余格式：<1000 完整显示（保精度），>=1000 折成 x.xk（保清爽），
+      // 先按两位小数四舍五入再判阈值，避免 999.999 进位后显示成 1000.00 的完整长串
+      let netText = '', netCls = '';
+      if (hasBills) {
+        const sign = dNet >= 0 ? '+' : '-';
+        const absR = Math.round(Math.abs(dNet) * 100);   // 分单位整数，等价保留两位小数
+        const abs = absR % 100
+          ? absR / 100
+          : Math.round(absR / 100);                      // 整数金额去掉 .00
+        netText = abs < 1000
+          ? sign + abs.toFixed(abs % 1 ? 2 : 0)
+          : sign + (abs / 1000).toFixed(1) + 'k';
+        netCls = netText.length > 7 ? ' tiny' : netText.length > 5 ? ' small' : '';
+      }
+
+      html += `
+        <div class="cal-cell ${dateStr === today ? 'today' : ''} ${dateStr > today ? 'future' : ''}" data-date="${dateStr}">
+          <div class="day-num">${d}</div>
+          ${hasBills ? `<div class="day-net ${dNet >= 0 ? 'pos' : 'neg'}${netCls}">${netText}</div>` : ''}
+        </div>`;
+    }
+    const tail = 42 - firstWeekday - daysInMonth;
+    for (let i = 0; i < tail; i++) {
+      html += '<div class="cal-cell blank"></div>';   // 月末补满 6 周
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // 更新月视图标题与当月汇总（增量换页时单独调用，避免整月重绘）
+  // animate 为 true 时：消费构成卡走「收起→退场→重绘→进场→恢复」完整动画序列
+  function updateMonthHeader(animate) {
+    saneViewDate();   // 渲染前自愈：即使 viewDate 被污染也不会显示"2194年"之类异常
+    const y = viewDate.getFullYear();
+    const m = viewDate.getMonth();
+    document.getElementById('monthTitle').innerHTML = `${y}年${m + 1}月 <span class="picker-chevron">▼</span>`;
+
+    const prefix = `${y}-${String(m + 1).padStart(2, '0')}`;
+    let mExp = 0, mInc = 0;
+    bills.forEach(b => {
+      if (b.date.startsWith(prefix)) {
+        b.type === 'expense' ? mExp += b.amount : mInc += b.amount;
+      }
+    });
+    const mExpEl = document.getElementById('monthExpense');
+    const mIncEl = document.getElementById('monthIncome');
+    mExpEl.textContent = mExp.toFixed(2);
+    mIncEl.textContent = mInc.toFixed(2);
+    fitValue(mExpEl);
+    fitValue(mIncEl);
+    if (animate) {
+      transitionChart();   // 切月：消费构成手环式过渡动画
+    } else {
+      renderChart();       // 初始加载/跳月：静态渲染
+    }
+  }
+
+  function renderMonth() {
+    updateMonthHeader();
+    const y = viewDate.getFullYear();
+    const m = viewDate.getMonth();
+
+    // 三层滑轨：上月 / 本月 / 下月（共享一份汇总表，一次构建三次复用）
+    const netMap = buildNetMap();
+    document.getElementById('calCur').innerHTML = calHTML(y, m, netMap);
+    document.getElementById('calPrev').innerHTML = calHTML(m - 1 < 0 ? y - 1 : y, m - 1 < 0 ? 11 : m - 1, netMap);
+    document.getElementById('calNext').innerHTML = calHTML(m + 1 > 11 ? y + 1 : y, m + 1 > 11 ? 0 : m + 1, netMap);
+    // 复位滑轨：瞬时跳变（关闭过渡 + 强制回流），避免切换后二次反向滑动
+    calTrack.classList.add('dragging');
+    calTrack.style.transform = 'translateX(0)';
+    void calTrack.offsetWidth;
+    calTrack.classList.remove('dragging');
+  }
+
+  // ===== 消费构成统计（环形图 + 分类图例，iOS 风格） =====
+  // 每个支出分类一个 iOS 色；未匹配分类兜底灰色
+  const CAT_COLORS = {
+    food: '#FF9F0A', study: '#0A84FF', traffic: '#5AC8FA', medical: '#FF375F',
+    daily: '#A2845E', shop: '#BF5AF2', fun: '#30D158', social: '#FF6482',
+    bill: '#64D2FF', other: '#8E8E93'
+  };
+
+  function shortDate(dateStr) {
+    const [, m, d] = dateStr.split('-');
+    return `${+m}月${+d}日`;
+  }
+
+  // 聚合当前查看月份（viewDate）的支出：按分类汇总金额，并附当月账单明细
+  function monthCatData() {
+    const y = viewDate.getFullYear(), m = viewDate.getMonth();
+    const prefix = `${y}-${String(m + 1).padStart(2, '0')}`;
+    const map = new Map();
+    bills.forEach(b => {
+      if (!b.date.startsWith(prefix) || b.type !== 'expense') return;
+      const cat = CATEGORIES.expense.find(c => c.id === b.cat);
+      const id = cat ? cat.id : 'other';
+      if (!map.has(id)) map.set(id, {
+        id, amount: 0, bills: [],
+        name: cat ? cat.name : '其他',
+        emoji: cat ? cat.emoji : '📦'
+      });
+      const e = map.get(id);
+      e.amount += b.amount;
+      e.bills.push(b);
+    });
+    return [...map.values()].sort((a, b) => b.amount - a.amount);
+  }
+
+  // 总金额数字过长时按长度降档字号（圆环内 / 展开态右上共用，保证任何金额完整显示）
+  // 30px 字号下约 8 个字符即接近环内可用宽度，逐级收紧避免溢出
+  function fitTotal(el) {
+    const len = el.textContent.length;
+    el.classList.toggle('small', len > 8);
+    el.classList.toggle('tiny',  len > 11);
+    el.classList.toggle('micro', len > 15);
+  }
+
+  function renderChart() {
+    const y = viewDate.getFullYear(), m = viewDate.getMonth();
+    document.getElementById('chartSub').textContent = `${y}年${m + 1}月`;
+    const cats = monthCatData();   // 已按金额降序
+    const total = cats.reduce((s, c) => s + c.amount, 0);
+    const card = document.getElementById('chartCard');
+    const ring = document.getElementById('chartRing');
+    const barsTotal = document.getElementById('barsTotal');
+    const barsList = document.getElementById('barsList');
+    const detail = document.getElementById('chartDetail');
+    card.classList.remove('detail-open');   // 数据重建后回到折叠态（大圆环居中）
+    card.classList.toggle('no-data', !total);
+    if (!total) {          // 本月无支出：只显示空态提示
+      ring.innerHTML = ''; barsList.innerHTML = ''; detail.innerHTML = '';
+      barsTotal.textContent = '¥0.00';
+      return;
+    }
+
+    // ===== 大圆环（折叠态）生成：保持不变 =====
+    const totalText = `¥${total.toFixed(2)}`;
+    const TX = 128, TY = 128;
+    let cumDeg = -90, cumPct = 0;
+    const ringHTML = cats.map(c => {
+      const pct = c.amount / total * 100;
+      const a0 = cumDeg, a1 = cumDeg + pct * 3.6;
+      cumDeg = a1;
+      const mid = (a0 + a1) / 2 * Math.PI / 180;
+      const seg = Math.max(Math.min(pct, 100) - 0.35, 0.2);
+      const off = -cumPct;
+      cumPct += pct;
+      return { c, pct, x: Math.cos(mid), y: Math.sin(mid), seg, off };
+    });
+    const LBL_R = 124;
+    const COL_X = 112;
+    const GAP = 17;
+    ringHTML.forEach(s => {
+      s.side = s.x >= 0 ? 1 : -1;
+      s.lblY = TY + LBL_R * s.y;
+    });
+    [1, -1].forEach(side => {
+      const col = ringHTML.filter(s => s.side === side).sort((a, b) => a.lblY - b.lblY);
+      if (col.length < 2) return;
+      for (let i = 1; i < col.length; i++)
+        if (col[i].lblY < col[i - 1].lblY + GAP) col[i].lblY = col[i - 1].lblY + GAP;
+      const hi = TY + LBL_R, lo = TY - LBL_R;
+      if (col[col.length - 1].lblY > hi) {
+        col[col.length - 1].lblY = hi;
+        for (let i = col.length - 2; i >= 0; i--)
+          if (col[i].lblY > col[i + 1].lblY - GAP) col[i].lblY = col[i + 1].lblY - GAP;
+      }
+      if (col[0].lblY < lo) col.forEach(s => s.lblY += lo - col[0].lblY);
+    });
+    ring.innerHTML = `<svg viewBox="0 0 256 256">
+      <g class="rl-arc" transform="rotate(-90 128 128)">${ringHTML.map(s => `
+        <circle cx="128" cy="128" r="79" fill="none"
+          stroke="${CAT_COLORS[s.c.id] || '#8E8E93'}" stroke-width="20"
+          pathLength="100" stroke-dasharray="${s.seg.toFixed(3)} ${(100 - s.seg).toFixed(3)}"
+          stroke-dashoffset="${s.off.toFixed(3)}"></circle>`).join('')}</g>
+      ${ringHTML.map((s, i) => {
+        const color = CAT_COLORS[s.c.id] || '#8E8E93';
+        const r1 = v => v.toFixed(1);
+        const d = (i * 0.045).toFixed(2);
+        const p1x = TX + 93 * s.x,  p1y = TY + 93 * s.y;
+        const p2x = TX + 106 * s.x, p2y = TY + 106 * s.y;
+        const p3x = TX + s.side * (COL_X - 2);   // 引线终点略收于文字列，留白色 halo 间隙，避免压字
+        const txa = s.side > 0 ? 'start' : 'end';   // 右侧文字从左排；左侧从右排 → 都朝圆外延伸，避开引线
+        const txX = TX + s.side * COL_X;
+        return `
+      <polyline class="rl-line" pathLength="1" style="animation-delay:${d}s"
+        points="${r1(p1x)},${r1(p1y)} ${r1(p2x)},${r1(p2y)} ${r1(p3x)},${r1(s.lblY)}"
+        fill="none" stroke="${color}"></polyline>
+      ${s.pct >= 3 ? `<circle class="rl-dot" style="animation-delay:${(+d + 0.3).toFixed(2)}s" cx="${r1(p1x)}" cy="${r1(p1y)}" r="2.6" fill="${color}"></circle>` : ''}
+      <text class="rl-text" style="animation-delay:${(+d + 0.3).toFixed(2)}s"
+        x="${r1(txX)}" y="${r1(s.lblY)}" dy="3.8"
+        text-anchor="${txa}">${s.pct.toFixed(1)}%</text>`;
+      }).join('')}
+    </svg>
+    <div class="ring-center">
+      <div class="ring-total" id="ringTotal">${totalText}</div>
+      <div class="ring-label">本月支出</div>
+    </div>`;
+    fitTotal(document.getElementById('ringTotal'));
+
+    // ===== 展开态：顶部总金额（左上） =====
+    barsTotal.textContent = totalText;
+    fitTotal(barsTotal);
+
+    // ===== 展开态：左柱右文行列表（按占比横柱；金额 <1000 完整 / >=1000 用 x.xk） =====
+    const maxAmt = cats[0].amount;   // 已降序，最大的在顶
+    barsList.innerHTML = cats.map((c, ri) => {
+      const cat = CATEGORIES.expense.find(x => x.id === c.id);
+      const name = cat ? `${cat.emoji} ${cat.name}` : '📦 其他';
+      const w = (c.amount / maxAmt * 100).toFixed(1);
+      // 金额格式化：<1000 保留小数，>=1000 折 x.xk
+      const numText = c.amount < 1000
+        ? `¥${c.amount.toFixed(c.amount % 1 ? 2 : 0)}`
+        : `¥${(c.amount / 1000).toFixed(1)}k`;
+      const ncls = numText.length > 7 ? ' tiny' : numText.length > 5 ? ' small' : '';
+      // 百分数：保留一位小数
+      const pctText = (c.amount / total * 100).toFixed(1) + '%';
+      const pcls = pctText.length > 4 ? ' tiny' : '';
+      return `
+      <button class="brow" data-cat="${c.id}">
+        <span class="bcol" title="点击返回大圆环"><span class="bcbar"><i style="--w:${w}%;background:${CAT_COLORS[c.id] || '#8E8E93'}"></i></span></span>
+        <span class="btxt">
+          <span class="bname">${name}</span>
+          <span class="bmeta">
+            <span class="bpct${pcls}">${pctText}</span>
+            <span class="bnum${ncls}">${numText}</span>
+          </span>
+        </span>
+      </button>`;
+    }).join('');
+    // 柱条与右文逐行错落入场：行号越大延迟越大，形成自上而下的级联生长
+    barsList.querySelectorAll('.brow').forEach((row, i) => {
+      const col = row.querySelector('.bcol i');
+      const txt = row.querySelector('.btxt');
+      if (col) col.style.transitionDelay = `${(i * 0.05).toFixed(2)}s`;
+      if (txt) txt.style.transitionDelay = `${(i * 0.05 + 0.08).toFixed(2)}s`;
+    });
+  }
+
+  // ===== 切月消费构成过渡：收起 → 退场 → 重绘 → 进场 → 恢复（华为手环活动环风格） =====
+  // 令牌机制：连续快速切月时新一轮立即作废旧一轮，动画不打架
+  let chartTransToken = 0;
+  function transitionChart() {
+    const myTok = ++chartTransToken;
+    const card = document.getElementById('chartCard');
+    const ring = document.getElementById('chartRing');
+    const wasExpanded = card.classList.contains('detail-open');   // 切月前形态
+    const HAD = !card.classList.contains('no-data');              // 旧月份是否有数据
+
+    // 各步骤用令牌判断是否已被新一轮抢占
+    const alive = () => chartTransToken === myTok;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    (async () => {
+      card.classList.add('fast');                    // 加速形态过渡
+      // ⓪ 明细先收起：清空固定底部明细区（.chart-detail.open）与已展开的账单行
+      // （.bill.mini.expanded）触发手风琴折叠并复位，与大环收起并行
+      const detailWasOpen = !!document.getElementById('chartDetail')?.classList.contains('open');
+      if (detailWasOpen) {
+        const dEl = document.getElementById('chartDetail');
+        dEl.classList.remove('open');
+        dEl.dataset.current = '';
+        dEl.innerHTML = '';
+      }
+      // ① 展开态先收起：圆环弹回居中（右上金额"飞回"环内是自然逆过程）
+      // 明细折叠（0.4s）与大环收起（0.3s）并行，取较长者作为本步时长
+      const foldAll = async () => {
+        if (wasExpanded) card.classList.remove('detail-open');
+        await sleep(detailWasOpen ? 420 : (wasExpanded ? 300 : 0));
+        return alive();
+      };
+      if (wasExpanded || detailWasOpen) {
+        if (!await foldAll()) return;
+      }
+      // ② 旧环（大环）逆时针收拢退场：逐段径向往回缩 + 整体淡出
+      if (HAD) {
+        const arcs = [...ring.querySelectorAll('.rl-arc circle')];
+        const fade = ring.animate(
+          [{ opacity: 1 }, { opacity: 0 }],
+          { duration: 320, easing: 'cubic-bezier(0.4, 0, 0.6, 1)', fill: 'forwards' }
+        );
+        arcs.forEach(c => c.animate(
+          [{ strokeDasharray: c.getAttribute('stroke-dasharray') || '100 0' },
+           { strokeDasharray: '0.2 99.8' }],
+          { duration: 320, easing: 'cubic-bezier(0.4, 0, 0.6, 1)', fill: 'forwards' }
+        ));
+        await sleep(360);
+        if (!alive()) return;
+      } else if (ring.animate) {
+        ring.animate([{ opacity: 1 }, { opacity: 0 }],
+          { duration: 140, easing: 'ease', fill: 'forwards' });
+        await sleep(160);
+        if (!alive()) return;
+      }
+      // ③ 重绘：瞬时换入新月份数据
+      renderChart();
+      // 先取消容器上残留的退场淡出动画（fill:forwards 会把 opacity 钉在 0），
+      // 否则新环会被隐形；弧段动画挂在旧 circle 上，已随 innerHTML 替换销毁
+      if (ring.getAnimations) ring.getAnimations().forEach(a => a.cancel());
+      if (!alive()) return;
+      card.classList.remove('fast');
+      const NEW = !card.classList.contains('no-data');
+      // ④ 新环逐段顺时针生长（每段从各自起点沿画向补足）+ 引线/文字由自身动画跟随
+      if (NEW) {
+        const arcs = [...ring.querySelectorAll('.rl-arc circle')];
+        arcs.forEach((c, i) => c.animate(
+          [{ strokeDasharray: '0.2 99.8' },
+           { strokeDasharray: c.getAttribute('stroke-dasharray') || '100 0' }],
+          { duration: 460, delay: i * 70, easing: 'cubic-bezier(0.2, 0.6, 0.3, 1)', fill: 'backwards' }
+        ));
+        await sleep(460 + arcs.length * 70);   // 等最晚一段画完（含级联延迟）
+        if (!alive()) return;
+      }
+      // 切月后一律停留默认折叠态（居中大圆环）：renderChart 已重建静态数据并移除
+      // detail-open，无需恢复展开；无数据时 chart-body 的 grid 行折叠动画自动顺滑收矮
+    })();
+  }
+
+  // ===== 展开态交互：点击大圆环进入；柱区返回大圆环；文字区展开分类明细 =====
+  const chartCardEl = document.getElementById('chartCard');
+  const barsPanel = document.getElementById('chartBars');
+  const chartDetailEl = document.getElementById('chartDetail');
+
+  // 展开 / 收起形态，并复位明细区
+  function setDetailOpen(open) {
+    chartCardEl.classList.toggle('detail-open', open);
+    if (!open) {                     // 收起时清空明细，画布完全归位
+      chartDetailEl.innerHTML = '';
+      chartDetailEl.classList.remove('open');
+    }
+  }
+
+  // 点击大圆环 → 进入展开态（柱 + 文字）
+  document.getElementById('chartRing').addEventListener('click', e => {
+    if (!chartCardEl.classList.contains('detail-open')) setDetailOpen(true);
+  });
+
+  // 展开态面板点击：柱区域返回大圆环；文字区域展开/切换分类明细
+  barsPanel.addEventListener('click', e => {
+    // 严格左右分区：整行紧贴，柱区(.bcol)与文字区(.btxt)互不串扰
+    if (e.target.closest('.bcol')) {     // 点柱 → 返回大圆环
+      setDetailOpen(false);
+      return;
+    }
+    const brow = e.target.closest('.brow');
+    if (!brow) return;                   // 面板空白不响应
+    const catId = brow.dataset.cat;
+    // 已展开的正是此分类 → 收起
+    if (chartDetailEl.dataset.current === catId && chartDetailEl.classList.contains('open')) {
+      chartDetailEl.classList.remove('open');
+      chartDetailEl.dataset.current = '';
+      chartDetailEl.innerHTML = '';
+      return;
+    }
+    const c = monthCatData().find(x => x.id === catId);
+    if (c) {
+      const catDef = CATEGORIES.expense.find(x => x.id === catId);
+      const name = catDef ? catDef.name : '其他';
+      const emoji = catDef ? catDef.emoji : '📦';
+      chartDetailEl.innerHTML = `
+      <div class="cl-detail-inner">
+        <div class="cl-detail-title">${name} · 共 ${c.bills.length} 笔</div>
+        ${c.bills.map(b => `
+          <div class="bill mini expense">
+            <div class="bill-actions">
+              <button class="swipe-edit" data-edit="${b.ts}">编辑</button>
+              <button class="swipe-del" data-del="${b.ts}">删除</button>
+            </div>
+            <div class="bill-main">
+              <div class="icon">${emoji}</div>
+              <div class="info">
+                <div class="name">${name}${b.note ? ' · ' + escapeHTML(b.note) : ''}</div>
+                <div class="time">${shortDate(b.date)} ${b.time}</div>
+              </div>
+              <div class="num expense">-¥${b.amount.toFixed(2)}</div>
+            </div>
+          </div>`).join('')}
+      </div>`;
+      chartDetailEl.classList.add('open');
+      chartDetailEl.dataset.current = catId;
+      // ③ 明细卡逐条上滑错落入场
+      chartDetailEl.querySelectorAll('.bill.mini').forEach((b, i) => {
+        b.style.animationDelay = `${(i * 0.05).toFixed(2)}s`;
+      });
+    }
+  });
+
+  // 消费构成明细：账单行的编辑 / 删除 / 点击展开（交互与日视图一致）
+  chartDetailEl.addEventListener('click', e => {
+    // 删除：折叠动画后移除，并同步刷新日视图与月视图（统计、日历随之更新）
+    const delBtn = e.target.closest('[data-del]');
+    if (delBtn) {
+      const card = delBtn.closest('.bill.mini');
+      if (!card || card.classList.contains('removing')) return;
+      card.style.height = card.offsetHeight + 'px';
+      void card.offsetHeight;
+      card.classList.add('removing');
+      card.style.height = '0px';
+      setTimeout(() => {
+        const id = +delBtn.dataset.del;
+        bills = bills.filter(b => b.ts !== id);
+        saveBills(bills);
+        renderDay();    // 若删的是当日记录，日视图列表同步
+        renderMonth();  // 重建日历与消费构成统计
+      }, 450);
+      return;
+    }
+    // 编辑：复用日视图编辑面板
+    const editBtn = e.target.closest('[data-edit]');
+    if (editBtn) {
+      startEdit(+editBtn.dataset.edit);
+      return;
+    }
+    // 点击账单行：展开 / 收起该行的编辑删除（屏蔽拖拽后的合成 click）
+    const main = e.target.closest('.bill-main');
+    if (main) {
+      if (Date.now() - dragEndTs < 600) return;
+      const card = main.parentElement;
+      card.classList.toggle('expanded', !card.classList.contains('expanded'));
+      return;
+    }
+    // 点击明细空白：收起所有已展开的行
+    chartDetailEl.querySelectorAll('.bill.mini.expanded').forEach(b => b.classList.remove('expanded'));
+  });
+
+  // ===== 渲染日视图 =====
+  // 根据文本长度为金额元素添加降档字号类（自适应显示）
+  function fitValue(el) {
+    const len = el.textContent.length;
+    el.classList.toggle('small', len > 9 && len <= 13);
+    el.classList.toggle('tiny',  len > 13);
+  }
+
+  // 只刷新上栏汇总数字，不重建列表（删除后保持其他卡片的展开/拖拽状态）
+  function updateDaySummary() {
+    let tExp = 0, tInc = 0;
+    bills.forEach(b => {
+      if (b.date === curDate) b.type === 'expense' ? tExp += b.amount : tInc += b.amount;
+    });
+    const expEl = document.getElementById('totalExpense');
+    const incEl = document.getElementById('totalIncome');
+    expEl.textContent = tExp.toFixed(2);
+    incEl.textContent = tInc.toFixed(2);
+    fitValue(expEl);
+    fitValue(incEl);
+    const net = tInc - tExp;
+    const netEl = document.getElementById('dayNet');
+    netEl.textContent = (net >= 0 ? '+' : '-') + Math.abs(net).toFixed(2);
+    netEl.style.color = net >= 0 ? '#34c759' : '#ff3b30';
+    fitValue(netEl);
+  }
+
+  function renderDay() {
+    const dayBills = bills.filter(b => b.date === curDate)
+                          .sort((a, b) => b.ts - a.ts);
+
+    // 上栏汇总
+    updateDaySummary();
+    // 标题：日期 + 星期 + 今天徽标（注意用本地时区解析日期）
+    const wd = '日一二三四五六'[new Date(curDate.replace(/-/g, '/')).getDay()];
+    document.getElementById('dateTitle').innerHTML =
+      `${formatCN(curDate)} · 星期${wd}` +
+      (curDate === todayStr() ? ' <span class="today-chip">今天</span>' : '');
+
+    // 列表
+    const list = document.getElementById('list');
+    const fab = document.getElementById('fab');
+    const isFuture = curDate > todayStr();
+    // 未来日期：可查看但不能记，隐藏加号
+    fab.classList.toggle('hide', isFuture);
+
+    if (isFuture) {
+      list.innerHTML = '<div class="empty">这一天还没到<br>到了那天再来记吧</div>';
+      return;
+    }
+    if (dayBills.length === 0) {
+      list.innerHTML = '<div class="empty">这一天还没有记录</div>';
+      return;
+    }
+    list.innerHTML = dayBills.map((b, i) => {
+      // 防御脏数据：历史记录可能缺失 type 字段（自愈逻辑只补 date），
+      // 若拿不到分类数组则回退为默认分类，避免 .find 对一个 undefined 报错
+      const items = CATEGORIES[b.type] || [];
+      const cat = items.find(c => c.id === b.cat) || { emoji: b.type === 'expense' ? '📦' : '💰', name: b.type === 'expense' ? '其他' : '收入' };
+      // 金额过长时降档字号，保证完整显示
+      const numText = `${b.type === 'expense' ? '-' : '+'}¥${b.amount.toFixed(2)}`;
+      const numCls = numText.length > 11 ? 'xlong' : numText.length > 9 ? 'long' : '';
+      return `
+      <div class="bill ${b.type}" data-id="${b.ts}">
+        <div class="bill-actions">
+          <button class="swipe-edit" data-edit="${b.ts}">编辑</button>
+          <button class="swipe-del" data-del="${b.ts}">删除</button>
+        </div>
+        <div class="bill-main">
+          <div class="icon ${b.type}">${cat.emoji}</div>
+          <div class="info">
+            <div class="name">${cat.name}${b.note ? ' · ' + escapeHTML(b.note) : ''}</div>
+            <div class="time">${b.time}</div>
+          </div>
+          <div class="num ${b.type} ${numCls}">${numText}</div>
+        </div>
+      </div>
+    `; }).join('');
+  }
+
+  function escapeHTML(s) {
+    return s.replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    })[c]);
+  }
+
+  // ===== 账单卡片交互：点按揭示右侧删除（苹果式动画） =====
+  const listEl = document.getElementById('list');
+
+  function collapseAll() {
+    listEl.querySelectorAll('.bill.expanded').forEach(b => b.classList.remove('expanded'));
+  }
+
+  listEl.addEventListener('click', e => {
+    // 点击删除按钮
+    const delBtn = e.target.closest('[data-del]');
+    if (delBtn) {
+      const card = delBtn.closest('.bill');
+      if (card.classList.contains('removing')) return;   // 防止动画期间重复点击
+      // 高度折叠动画：先锁定当前实际高度，再过渡到 0。
+      // 下方卡片全程同步平滑上移，节点移除时零跳变（页面完整性）
+      card.style.height = card.offsetHeight + 'px';
+      void card.offsetHeight;              // 强制回流，确保高度过渡从锁定值起步
+      card.classList.add('removing');
+      card.style.height = '0px';
+      // 动画结束后：只移除该节点并局部刷新汇总，不重建列表，
+      // 其余卡片的展开/左滑状态得以保留，期间可正常交互
+      setTimeout(() => {
+        const id = +delBtn.dataset.del;
+        bills = bills.filter(b => b.ts !== id);
+        saveBills(bills);
+        card.remove();
+        if (listEl.querySelector('.bill')) {
+          updateDaySummary();
+        } else {
+          renderDay();   // 删空了：显示空状态提示
+        }
+        renderMonth();
+      }, 450);
+      return;
+    }
+    // 点击编辑按钮：进入编辑模式
+    const editBtn = e.target.closest('[data-edit]');
+    if (editBtn) {
+      startEdit(+editBtn.dataset.edit);
+      return;
+    }
+    // 点击卡片主体：揭示/收起右侧删除（同时收起其他卡片）
+    const main = e.target.closest('.bill-main');
+    if (main) {
+      // 左滑/右滑结束后浏览器会补发一次合成 click：若刚拖拽过则忽略，展开只由轻点或左滑引起
+      if (Date.now() - dragEndTs < 600) return;
+      const card = main.parentElement;
+      const wasOpen = card.classList.contains('expanded');
+      collapseAll();
+      if (!wasOpen) card.classList.add('expanded');
+    }
+  });
+
+  // 点击空白处（卡片以外）收起所有展开的删除按钮
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.bill')) collapseAll();
+  });
+
+  // ===== 左滑手势：跟手拖拽，松手吸附（iOS 邮件交互） =====
+  const SWIPE_OPEN = 168;   // 完全展开位移
+  const SWIPE_THRESHOLD = 84; // 过半即吸附展开
+
+  let swipe = null;   // { card, main, startX, startY, locked }
+let dragEndTs = 0;  // 最近一次拖拽结束的时间戳：用于屏蔽拖拽后浏览器补发的合成 click
+
+  function setMainX(main, x, animate) {
+    main.classList.toggle('dragging', !animate);
+    main.style.transform = x === null ? '' : `translateX(${x}px)`;
+  }
+
+  // 让容器内的 .bill 卡片支持左滑跟手拖拽、松手吸附（iOS 邮件交互）
+  // 日视图账单列表与消费构成明细共用同一套手势
+  function bindCardSwipe(container) {
+    container.addEventListener('touchstart', e => {
+      const card = e.target.closest('.bill');
+      if (!card) { swipe = null; return; }
+      swipe = {
+        card,
+        main: card.querySelector('.bill-main'),
+        startX: e.touches[0].clientX,
+        startY: e.touches[0].clientY,
+        startOpen: card.classList.contains('expanded') ? -SWIPE_OPEN : 0,
+        locked: false
+      };
+    }, { passive: true });
+
+    container.addEventListener('touchmove', e => {
+      if (!swipe) return;
+      const dx = e.touches[0].clientX - swipe.startX;
+      const dy = e.touches[0].clientY - swipe.startY;
+      if (!swipe.locked) {
+        // 水平意图判定：横向位移大于纵向且超过 10px 才进入拖拽，避免干扰滚动
+        if (Math.abs(dx) < 10 || Math.abs(dx) <= Math.abs(dy)) return;
+        swipe.locked = true;
+        swipe.card.classList.add('swiping');        // 拖拽中显示按钮（.swiping 类）
+        swipe.card.classList.remove('expanded');    // 转为内联拖拽控制
+        setMainX(swipe.main, swipe.startOpen, false);
+      }
+      // 起点含已展开偏移；橡皮筋阻尼：超过展开宽度后按 30% 跟随
+      let x = swipe.startOpen + dx;
+      if (x < -SWIPE_OPEN) x = -SWIPE_OPEN + (x + SWIPE_OPEN) * 0.3;
+      if (x > 0) x = 0;
+      swipe.base = x;
+      setMainX(swipe.main, x, false);
+    }, { passive: true });
+
+    container.addEventListener('touchend', () => {
+      if (!swipe) return;
+      const { card, main, locked, base } = swipe;
+      if (locked) {
+        dragEndTs = Date.now();                    // 拖拽结束：屏蔽随后补发的合成 click
+        card.classList.remove('swiping');           // 清除拖拽态，交还给 .expanded 决定最终显隐
+        // 过半吸附展开，否则弹回；同时淡入/淡出操作按钮
+        if (base < -SWIPE_THRESHOLD) card.classList.add('expanded');
+        else card.classList.remove('expanded');
+        setMainX(main, null, true);   // 清除内联值，交还给 .expanded 类过渡
+      }
+      swipe = null;
+    }, { passive: true });
+    container.addEventListener('touchcancel', () => {
+      if (swipe && swipe.locked) {
+        swipe.card.classList.remove('swiping');
+        swipe.card.classList.remove('expanded');
+        setMainX(swipe.main, null, true);
+      }
+      swipe = null;
+    }, { passive: true });
+  }
+
+  bindCardSwipe(listEl);
+  bindCardSwipe(document.getElementById('chartDetail'));   // 消费构成明细同样支持左滑编辑/删除
+
+  // ===== 日视图右划返回月视图（iOS 边缘返回手势） =====
+  // 日视图跟手右移，月视图同步亮起滑回（压暗层与视差全程跟随手指）
+  let backDrag = null;   // { startX, startY, locked }
+
+  dayView.addEventListener('touchstart', e => {
+    // 键盘面板打开时不触发返回手势
+    if (sheet.classList.contains('show')) { backDrag = null; return; }
+    // 已展开操作按钮的卡片上右划 = 收起卡片（交给卡片手势），不触发返回
+    const startCard = e.target.closest('.bill');
+    if (startCard && startCard.classList.contains('expanded')) { backDrag = null; return; }
+    backDrag = {
+      startX: e.touches[0].clientX,
+      startY: e.touches[0].clientY,
+      locked: false
+    };
+  }, { passive: true });
+
+  dayView.addEventListener('touchmove', e => {
+    if (!backDrag) return;
+    const dx = e.touches[0].clientX - backDrag.startX;
+    const dy = e.touches[0].clientY - backDrag.startY;
+    if (!backDrag.locked) {
+      // 横向意图判定：向右划超过 12px 且横向占优才锁定
+      if (dx < 12 || Math.abs(dx) <= Math.abs(dy)) return;
+      backDrag.locked = true;
+      dayView.classList.add('dragging');
+      monthView.classList.add('dragging');   // 关闭月视图及遮罩的过渡，跟手
+    }
+    const w = dayView.offsetWidth;
+    // 只能向右拖，向左有轻微橡皮筋（30% 跟随）
+    let x = Math.max(0, dx);
+    if (dx < 0) x = dx * 0.3;
+    backDrag.x = x;
+    dayView.style.transform = `translateX(${x}px)`;
+    // 月视图视差 + 压暗遮罩按拖拽进度同步（progress: 0~1，拖出越多越亮）
+    const progress = Math.min(1, x / w);
+    monthView.style.transform = `translateX(${-28 * (1 - progress)}%)`;
+    monthView.style.setProperty('--push-dim', (0.14 * (1 - progress)).toFixed(3));
+  }, { passive: true });
+
+  dayView.addEventListener('touchend', () => {
+    if (!backDrag) return;
+    const { locked, x } = backDrag;
+    if (locked) {
+      dragEndTs = Date.now();   // 右划/拖拽结束：屏蔽随后补发的合成 click，避免误展开卡片
+      const w = dayView.offsetWidth || 1;
+      // 拖过 1/3 或快速轻扫（>60px）即返回
+      const shouldBack = (x / w) > 0.33 || x > 60;
+      dayView.classList.remove('dragging');
+      monthView.classList.remove('dragging');
+      dayView.style.transform = '';
+      monthView.style.transform = '';
+      monthView.style.removeProperty('--push-dim');
+      if (shouldBack) {
+        showMonth();
+      }
+      // 不足阈值：保留 pushed，弹回原位
+    }
+    backDrag = null;
+  }, { passive: true });
+  dayView.addEventListener('touchcancel', () => {
+    if (backDrag && backDrag.locked) {
+      dayView.classList.remove('dragging');
+      monthView.classList.remove('dragging');
+      dayView.style.transform = '';
+      monthView.style.transform = '';
+      monthView.style.removeProperty('--push-dim');
+    }
+    backDrag = null;
+  }, { passive: true });
+
+  // ===== 月视图左右划切换月份（跟手滑轨，动画可打断） =====
+  // 三层页面（上月/本月/下月）叠放，拖拽时整体跟手位移；
+  // 松手按落点判定：过半即切换，否则弹回。滑动落定途中可随时按住反向拖
+
+  // 读取滑轨当前实际位移（含动画进行中的实时位置）
+  function trackCurrentX() {
+    const t = getComputedStyle(calTrack).transform;
+    if (!t || t === 'none') return 0;
+    const m = t.match(/matrix\(([^)]+)\)/);
+    if (!m) return 0;
+    return parseFloat(m[1].split(',')[4]) || 0;
+  }
+
+  let monthDrag = null;      // { startX, startY, startT, locked, originX, x, w, samples }
+  let cancelSettle = null;   // 落定动画被新手势打断时的清理函数
+  let suppressClick = false; // 滑动手势结束后抑制一次 click（防误触日期格进入日视图）
+
+  // 手势挂在整个月视图上：顶部标题/汇总栏也可划动切换，全页跟手
+  monthView.addEventListener('touchstart', e => {
+    // 消费构成统计卡内不触发切月手势：明细账单行的左滑/点击交给卡片自己处理
+    if (e.target.closest('.chart-card')) { monthDrag = null; return; }
+    suppressClick = false;
+    monthDrag = {
+      startX: e.touches[0].clientX,
+      startY: e.touches[0].clientY,
+      startT: performance.now(),
+      locked: false,
+      originX: 0, x: 0, w: 0,
+      samples: []   // 速度采样：[{ x, t }]，仅保留最近 100ms
+    };
+  }, { passive: true });
+
+  monthView.addEventListener('touchmove', e => {
+    if (!monthDrag) return;
+    const cx = e.touches[0].clientX;
+    const dx = cx - monthDrag.startX;
+    const dy = e.touches[0].clientY - monthDrag.startY;
+    if (!monthDrag.locked) {
+      // 横向意图判定：10px（iOS tap 容差）且横向占优才锁定，杜绝手指微动误判
+      if (Math.abs(dx) < 10 || Math.abs(dx) <= Math.abs(dy)) return;
+      monthDrag.locked = true;
+      // 打断进行中的落定动画：先读当前动画位置，再冻结（连续翻页不断触）
+      const frozen = trackCurrentX();
+      if (cancelSettle) { cancelSettle(); cancelSettle = null; }
+      calTrack.classList.add('dragging');
+      calTrack.style.transform = `translateX(${frozen}px)`;
+      monthDrag.originX = frozen;
+    } else if (e.cancelable) {
+      e.preventDefault();   // 锁定横向后阻止垂直滚动漂移，纯横向跟手
+    }
+    // 速度采样：只保留最近 100ms，用于松手时的轻扫判定
+    const now = performance.now();
+    monthDrag.samples.push({ x: cx, t: now });
+    while (monthDrag.samples.length > 1 && now - monthDrag.samples[0].t > 100) monthDrag.samples.shift();
+    // 滑轨自身宽度做位移基准：滑出量恰好等于一页日历宽（各月固定 42 格，等价无差异）
+    const w = calTrack.offsetWidth || 320;
+    monthDrag.w = w;
+    let x = monthDrag.originX + dx;
+    // 橡皮筋：不拖出两侧相邻页之外
+    if (x > w) x = w + (x - w) * 0.3;
+    else if (x < -w) x = -w + (x + w) * 0.3;
+    monthDrag.x = x;
+    calTrack.style.transform = `translateX(${x}px)`;
+  }, { passive: false });
+
+  // 松手/手势被打断：先区分 tap 与真实拖拽，再按位置/惯性落定
+  function releaseTrack() {
+    if (!monthDrag) return;
+    if (monthDrag.locked) {
+      const x = monthDrag.x || 0;
+      const w = monthDrag.w || calTrack.offsetWidth || 320;
+      const dx = x - monthDrag.originX;
+      const duration = performance.now() - monthDrag.startT;
+      // tap 判定：短时 + 小位移 = 用户在点按（非滑动），直接弹回并放行 click 进日视图
+      // （此前 6px 锁定 + 瞬时速度虚高导致 tap 被误判成轻扫，点击日期反而切月）
+      if (duration < 250 && Math.abs(dx) < 10) {
+        calTrack.classList.remove('dragging');
+        calTrack.style.transform = 'translateX(0)';
+        monthDrag = null;
+        return;   // 不设 suppressClick，让 click 正常触发
+      }
+      // 轻扫速度：最近 100ms 采样的平均横向速度；采样跨度太短时不可信（瞬时抖动虚高），置零
+      let vx = 0;
+      const s = monthDrag.samples;
+      if (s.length > 1 && s[s.length - 1].t - s[0].t >= 30) {
+        const dt = s[s.length - 1].t - s[0].t;
+        vx = (s[s.length - 1].x - s[0].x) / dt * 1000;
+      }
+      // iOS 分页决策：当前位移 + 惯性投影（0.22s 滑行量）越过阈值即切换。
+      // 投影仅对真实拖拽（≥40px）启用，tap 级微移不受速度影响
+      const projected = Math.abs(x) >= 40 ? x + vx * 0.22 : x;
+      const threshold = Math.min(w / 3, 150);
+      calTrack.classList.remove('dragging');
+      if (projected <= -threshold) {
+        switchMonth(1);    // 左划落点越过阈值 → 下个月
+      } else if (projected >= threshold) {
+        switchMonth(-1);   // 右划落点越过阈值 → 上个月
+      } else {
+        calTrack.style.transform = 'translateX(0)';   // 弹回本月
+      }
+      suppressClick = true;   // 本次滑动手势结束，吞掉紧随的 click
+    }
+    monthDrag = null;
+  }
+  monthView.addEventListener('touchend', releaseTrack, { passive: true });
+  monthView.addEventListener('touchcancel', releaseTrack, { passive: true });
+
+  // ===== 月份切换：滑入相邻页后增量换页 =====
+  let monthSwitching = false;   // 按钮连点防抖
+  // viewDate 自愈：异常年份（NaN/越界）重置回今天所在月，杜绝"2194年"之类的污染扩散
+  function saneViewDate() {
+    const y = viewDate.getFullYear();
+    if (!Number.isFinite(y) || y < 2000 || y > 2100) {
+      const t = new Date();
+      viewDate = new Date(t.getFullYear(), t.getMonth(), 1);
+    }
+  }
+  function switchMonth(delta) {
+    if (monthSwitching) return;
+    monthSwitching = true;
+    saneViewDate();   // 切换前先自愈，防止污染状态继续累积
+    const w = calTrack.offsetWidth || 320;   // 旋转屏幕瞬间可能为 0，兜底防错位
+    calTrack.classList.remove('dragging');
+    calTrack.style.transform = `translateX(${-delta * w}px)`;   // 恰好滑入一整页日历
+
+    let done = false;
+    let timer = null;
+    const onEnd = e => {
+      if (e.target !== calTrack || e.propertyName !== 'transform') return;
+      finish();
+    };
+    const finish = () => {
+      if (done) return;
+      done = true;
+      cancelSettle = null;
+      calTrack.removeEventListener('transitionend', onEnd);
+      clearTimeout(timer);
+      viewDate.setDate(1);   // 固定 1 号再换月，杜绝 setMonth 的月末溢出（如 31→短月跳两月）
+      viewDate.setMonth(viewDate.getMonth() + delta);
+      shiftPages(delta);   // 增量换页 + 瞬时复位，一帧完成
+      monthSwitching = false;
+    };
+    cancelSettle = () => {   // 被新手势打断：不换月，控制权交还手势
+      if (done) return;
+      done = true;
+      calTrack.removeEventListener('transitionend', onEnd);
+      clearTimeout(timer);
+      monthSwitching = false;
+    };
+    // 等过渡真正结束（过滤子元素冒泡），与动画严格同步
+    calTrack.addEventListener('transitionend', onEnd);
+    timer = setTimeout(finish, 700);   // 兜底：后台标签页 transitionend 丢失
+  }
+
+  // 增量换页：只渲染一个新页面，另外两页移动现有 DOM 节点（不重建，落定零卡顿）
+  // 滑到下月(+)后：本月页→上月槽，下月页→本月槽，只需渲染新的下月页；上月(-)同理
+  function shiftPages(delta) {
+    const calPrev = document.getElementById('calPrev');
+    const calCur  = document.getElementById('calCur');
+    const calNext = document.getElementById('calNext');
+    const netMap = buildNetMap();
+    const y = viewDate.getFullYear();
+    const m = viewDate.getMonth();
+
+    if (delta > 0) {
+      calPrev.innerHTML = '';
+      calPrev.appendChild(calCur.firstElementChild);
+      calCur.appendChild(calNext.firstElementChild);
+      calNext.innerHTML = calHTML(m + 1 > 11 ? y + 1 : y, m + 1 > 11 ? 0 : m + 1, netMap);
+    } else {
+      calNext.innerHTML = '';
+      calNext.appendChild(calCur.firstElementChild);
+      calCur.appendChild(calPrev.firstElementChild);
+      calPrev.innerHTML = calHTML(m - 1 < 0 ? y - 1 : y, m - 1 < 0 ? 11 : m - 1, netMap);
+    }
+    updateMonthHeader(true);   // 切月：消费构成卡走手环式过渡动画
+
+    // 瞬时复位：换页前后视口内容一致（旧相邻页升为本月页），肉眼无感
+    calTrack.classList.add('dragging');
+    calTrack.style.transform = 'translateX(0)';
+    void calTrack.offsetWidth;
+    calTrack.classList.remove('dragging');
+  }
+
+  // ===== 键盘面板 =====
+  const sheet = document.getElementById('sheet');
+  const mask  = document.getElementById('mask');
+  let editingId = null;   // 非空表示正在编辑已有记录
+
+  function openSheet() {
+    if (curDate > todayStr()) return;   // 未来日期禁止记账
+    editingId = null;
+    document.getElementById('saveBtn').textContent = '保存';
+    amount = '0';
+    curType = 'expense';
+    curCat = 'food';
+    setType('expense');
+    document.getElementById('noteInput').value = '';
+    updateAmountDisplay();
+    sheet.classList.add('show');
+    mask.classList.add('show');
+  }
+
+  // 编辑已有记录：预填类型/分类/金额/备注
+  function startEdit(id) {
+    const b = bills.find(x => x.ts === id);
+    if (!b) return;
+    editingId = id;
+    document.getElementById('saveBtn').textContent = '更新';
+    curDate = b.date;          // 回到该记录所在日期的日视图
+    setType(b.type);
+    curCat = b.cat;
+    renderCategories();
+    amount = String(b.amount);
+    document.getElementById('noteInput').value = b.note || '';
+    updateAmountDisplay();
+    collapseAll();
+    sheet.classList.add('show');
+    mask.classList.add('show');
+  }
+
+  function closeSheet() {
+    editingId = null;
+    sheet.classList.remove('show');
+    mask.classList.remove('show');
+  }
+
+  function setType(type) {
+    curType = type;
+    // 切换类型时重置为该类型的第一个分类
+    curCat = CATEGORIES[type][0].id;
+    const btnExp = document.getElementById('btnExpense');
+    const btnInc = document.getElementById('btnIncome');
+    const disp = document.getElementById('amountDisplay');
+    btnExp.className = type === 'expense' ? 'active-expense' : '';
+    btnInc.className = type === 'income' ? 'active-income' : '';
+    disp.className = `amount-display ${type}-mode show-caret`;
+    renderCategories();
+  }
+
+  // ===== 金额输入（字符串操作，防止浮点问题） =====
+  function pressKey(key) {
+    if (key === 'del') {
+      amount = amount.length > 1 ? amount.slice(0, -1) : '0';
+    } else if (key === 'clear') {
+      amount = '0';
+    } else if (key === '.') {
+      if (!amount.includes('.')) amount += '.';
+    } else if (key === '00') {
+      if (amount !== '0') amount = limitDecimals(amount + '00');
+    } else { // 数字
+      if (amount === '0') amount = key;
+      else amount = limitDecimals(amount + key);
+    }
+    // 长度限制（最多 8 位整数）
+    const [int, dec] = amount.split('.');
+    if (int.length > 8) amount = int.slice(0, 8) + (dec !== undefined ? '.' + dec : '');
+    updateAmountDisplay();
+  }
+
+  function limitDecimals(s) {
+    const i = s.indexOf('.');
+    if (i === -1) return s;
+    return s.slice(0, i + 3); // 最多 2 位小数
+  }
+
+  function updateAmountDisplay() {
+    const inputEl = document.getElementById('amountInput');
+    const text = amount || '0';
+    inputEl.textContent = text;
+    // 金额位数越多字号越小，保证输入时完整可见
+    inputEl.style.fontSize = text.length > 10 ? '26px' : text.length > 8 ? '31px' : '';
+    document.getElementById('saveBtn').disabled = parseFloat(amount) <= 0;
+  }
+
+  // ===== 保存（新增 or 更新） =====
+  function saveBill() {
+    const val = parseFloat(amount);
+    if (!val || val <= 0) return;
+    const note = document.getElementById('noteInput').value.trim();
+
+    if (editingId !== null) {
+      // 编辑模式：保留原日期和时间，只更新内容
+      const idx = bills.findIndex(x => x.ts === editingId);
+      if (idx === -1) return;
+      bills[idx] = { ...bills[idx], type: curType, cat: curCat, amount: val, note };
+    } else {
+      // 新增模式：记到当前查看的日期（未来日期已在入口拦截）
+      if (curDate > todayStr()) return;
+      const now = new Date();
+      bills.push({
+        date: curDate,
+        type: curType,
+        cat: curCat,
+        amount: val,
+        note,
+        time: `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`,
+        ts: now.getTime()
+      });
+    }
+    saveBills(bills);
+    document.getElementById('noteInput').value = '';
+    editingId = null;
+    renderDay();
+    renderMonth();   // 同步刷新月视图汇总
+    closeSheet();
+  }
+
+  // ===== 事件绑定 =====
+  document.getElementById('fab').addEventListener('click', openSheet);
+  mask.addEventListener('click', closeSheet);
+  document.getElementById('keypad').addEventListener('click', e => {
+    const key = e.target.dataset && e.target.dataset.key;
+    if (key === 'save') saveBill();
+    else if (key) pressKey(key);
+  });
+  // ===== 年月快捷选择器 =====
+  const ymMask = document.getElementById('ymMask');
+  const ymSheet = document.getElementById('ymSheet');
+  const ymYears = document.getElementById('ymYears');
+  const ymMonths = document.getElementById('ymMonths');
+  let ymSelY, ymSelM;   // sheet 当前选中的年月（提交前）
+
+  function buildYMCols() {
+    const today = new Date();
+    const ty = today.getFullYear(), tm = today.getMonth() + 1;
+    const curY = viewDate.getFullYear();
+    const curM = viewDate.getMonth() + 1;
+    // 年份：只显示有账单记录的年份 + 当前年（即使没记录也要能看到当前月），不显示未来
+    const yearsWithBills = new Set(bills.map(b => +b.date.slice(0, 4)));
+    yearsWithBills.add(ty);
+    if (!yearsWithBills.has(curY)) yearsWithBills.add(curY);
+    const yList = [...yearsWithBills].sort((a, b) => a - b).filter(y => y <= ty);
+    const yMin = yList[0], yMax = ty;
+    ymSelY = curY; ymSelM = curM;
+    if (ymSelY > ty) ymSelY = ty;
+
+    ymYears.innerHTML = '';
+    for (let i = 0; i < 3; i++) { const s = document.createElement('div'); s.className = 'ym-item ym-spacer'; ymYears.appendChild(s); }
+    for (let y = yMin; y <= yMax; y++) {
+      const div = document.createElement('div');
+      div.className = 'ym-item' + (y === ymSelY ? ' selected' : '') + (y === ty ? ' today' : '');
+      div.textContent = `${y}年`;
+      div.dataset.y = y;
+      ymYears.appendChild(div);
+    }
+    for (let i = 0; i < 3; i++) { const s = document.createElement('div'); s.className = 'ym-item ym-spacer'; ymYears.appendChild(s); }
+
+    ymMonths.innerHTML = '';
+    const mMax = (ymSelY === ty) ? tm : 12;   // 当前年只到本月，往年 1-12
+    if (ymSelY === ty && ymSelM > tm) ymSelM = tm;
+    for (let i = 0; i < 3; i++) { const s = document.createElement('div'); s.className = 'ym-item ym-spacer'; ymMonths.appendChild(s); }
+    for (let m = 1; m <= mMax; m++) {
+      const div = document.createElement('div');
+      div.className = 'ym-item' + (m === ymSelM ? ' selected' : '') + (ymSelY === ty && m === tm ? ' today' : '');
+      div.textContent = `${m}月`;
+      div.dataset.m = m;
+      ymMonths.appendChild(div);
+    }
+    for (let i = 0; i < 3; i++) { const s = document.createElement('div'); s.className = 'ym-item ym-spacer'; ymMonths.appendChild(s); }
+  }
+
+  // 手动 snap 动画：180ms iOS sheet 曲线，干脆利落
+  function snapToCenter(col, targetItem, duration = 180) {
+    const startTop = col.scrollTop;
+    const endTop = targetItem.offsetTop + targetItem.offsetHeight / 2 - col.clientHeight / 2;
+    const delta = endTop - startTop;
+    if (Math.abs(delta) < 0.5) return;
+    const t0 = performance.now();
+    function step(now) {
+      const t = Math.min(1, (now - t0) / duration);
+      // cubic-bezier(0.32, 0.72, 0, 1) — iOS sheet
+      const x = t;
+      const y = 1 - Math.pow(1 - x, 3);   // easeOutCubic 近似 sheet 曲线
+      col.scrollTop = startTop + delta * y;
+      if (t < 1) requestAnimationFrame(step);
+      else col.scrollTop = endTop;          // 精确落定
+    }
+    requestAnimationFrame(step);
+  }
+
+  function scrollColToCenter(col, val, attr) {
+    requestAnimationFrame(() => {
+      const target = col.querySelector(`.ym-item[data-${attr}="${val}"]`);
+      if (!target) return;
+      snapToCenter(col, target, 150);   // 打开时更短更快
+    });
+  }
+
+  // 滚动时实时更新 selected 高亮 + 松手快速吸附
+  function bindColLiveSelect(col, attr) {
+    let raf = null;
+    let snapTimer = null;
+
+    function findBest() {
+      const mid = col.scrollTop + col.clientHeight / 2;
+      let best = null, bestDist = Infinity;
+      col.querySelectorAll('.ym-item').forEach(item => {
+        if (item.classList.contains('ym-spacer')) return;
+        const itemMid = item.offsetTop + item.offsetHeight / 2;
+        const dist = Math.abs(itemMid - mid);
+        if (dist < bestDist) { bestDist = dist; best = item; }
+      });
+      return best;
+    }
+
+    col.addEventListener('scroll', () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        const best = findBest();
+        if (best) {
+          col.querySelectorAll('.ym-item.selected').forEach(i => i.classList.remove('selected'));
+          best.classList.add('selected');
+          if (attr === 'y') ymSelY = +best.dataset.y; else ymSelM = +best.dataset.m;
+        }
+      });
+      // 停止 60ms 后快速吸附（iOS picker 风格）
+      clearTimeout(snapTimer);
+      snapTimer = setTimeout(() => {
+        const best = findBest();
+        if (best) snapToCenter(col, best, 180);
+      }, 60);
+    }, { passive: true });
+
+    // 拦截 wheel：一格一跳，180ms 快速对齐
+    col.addEventListener('wheel', e => {
+      e.preventDefault();
+      clearTimeout(snapTimer);
+      const items = [...col.querySelectorAll('.ym-item')].filter(i => !i.classList.contains('ym-spacer'));
+      const curMid = col.scrollTop + col.clientHeight / 2;
+      let curIdx = 0;
+      for (let i = 0; i < items.length; i++) {
+        const m = items[i].offsetTop + items[i].offsetHeight / 2;
+        if (m <= curMid) curIdx = i; else break;
+      }
+      const nextIdx = Math.max(0, Math.min(items.length - 1, curIdx + (e.deltaY > 0 ? 1 : -1)));
+      snapToCenter(col, items[nextIdx], 150);
+    }, { passive: false });
+  }
+  bindColLiveSelect(ymYears, 'y');
+  bindColLiveSelect(ymMonths, 'm');
+
+  function openYMPicker() {
+    if (ymSheet.classList.contains('show')) return;
+    if (dayView.classList.contains('active')) showMonth();
+    buildYMCols();
+    ymMask.classList.add('show');
+    ymSheet.classList.add('show');
+    document.getElementById('monthTitle').classList.add('open');
+    // sheet 动画结束后滚到选中项居中
+    setTimeout(() => {
+      scrollColToCenter(ymYears, ymSelY, 'y');
+      scrollColToCenter(ymMonths, ymSelM, 'm');
+    }, 100);
+  }
+
+  function closeYMPicker() {
+    ymMask.classList.remove('show');
+    ymSheet.classList.remove('show');
+    document.getElementById('monthTitle').classList.remove('open');
+  }
+
+  function confirmYMPicker() {
+    const today = new Date();
+    let y = ymSelY, m = ymSelM;
+    if (y > today.getFullYear() || (y === today.getFullYear() && m > today.getMonth() + 1)) {
+      y = today.getFullYear(); m = today.getMonth() + 1;
+    }
+    viewDate = new Date(y, m - 1, 1);
+    if (y === today.getFullYear() && m === today.getMonth() + 1) {
+      curDate = todayStr();
+    }
+    renderMonth();
+    closeYMPicker();
+  }
+
+  document.getElementById('monthTitle').addEventListener('click', e => {
+    e.stopPropagation();
+    openYMPicker();
+  });
+  ymMask.addEventListener('click', closeYMPicker);
+  document.getElementById('ymCancel').addEventListener('click', closeYMPicker);
+  document.getElementById('ymConfirm').addEventListener('click', confirmYMPicker);
+  document.getElementById('ymToday').addEventListener('click', () => {
+    const t = new Date();
+    ymSelY = t.getFullYear(); ymSelM = t.getMonth() + 1;
+    scrollColToCenter(ymYears, ymSelY, 'y');
+    scrollColToCenter(ymMonths, ymSelM, 'm');
+  });
+  document.getElementById('fab').addEventListener('click', () => {
+    if (ymSheet.classList.contains('show')) closeYMPicker();
+  });
+
+  document.getElementById('backBtn').addEventListener('click', showMonth);
+  document.getElementById('prevMonth').addEventListener('click', () => switchMonth(-1));
+  document.getElementById('nextMonth').addEventListener('click', () => switchMonth(1));
+  // 点击日历格进入日视图（事件委托挂在滑轨上，覆盖三层页面）
+  // 日期串校验：格式 + 真实存在的日期 + 合理年份，挡住动画半途命中错误页面格子的污染值
+  function isValidDateStr(s) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const [y, m, d] = s.split('-').map(Number);
+    if (y < 2000 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return false;
+    const chk = new Date(y, m - 1, d);   // 分量构造跨平台安全
+    return chk.getFullYear() === y && chk.getMonth() === m - 1 && chk.getDate() === d;
+  }
+  calTrack.addEventListener('click', e => {
+    if (suppressClick) { suppressClick = false; return; }   // 刚结束滑动手势，吞掉误触
+    const cell = e.target.closest('.cal-cell[data-date]');
+    if (!cell) return;
+    if (!isValidDateStr(cell.dataset.date)) return;   // 非法日期不进日视图、不写数据
+    curDate = cell.dataset.date;
+    showDay();
+  });
+
+  // 初始化：默认打开当日视图（月视图作为底层屏幕被推入）
+  // 数据自愈①：修正日期串异常的账单（根因是 calPrev 参数错位导致 2026-2027-XX 格式）
+  // 用 ts（毫秒时间戳）反推正确日期，替换污染值。用户无法感知，无任何弹窗或提示
+  bills.forEach(b => {
+    if (!b.date || !/^\d{4}-\d{2}-\d{2}$/.test(b.date) ||
+        parseInt(b.date.split('-')[0]) < 2000 ||
+        parseInt(b.date.split('-')[1]) > 12 ||
+        parseInt(b.date.split('-')[2]) > 31) {
+      if (b.ts) {
+        const d = new Date(b.ts);
+        b.date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      }
+    }
+  });
+  // 数据自愈②：清除历史上误记到未来的记录（时间未到不可能发生真实消费）
+  const today = todayStr();
+  const cleaned = bills.filter(b => b.date <= today);
+  if (cleaned.length !== bills.length) {
+    bills = cleaned;
+  }
+  if (bills.length !== cleaned.length || bills.some((b, i) => b.date !== cleaned[i]?.date)) {
+    bills = cleaned;
+    saveBills(bills);
+  }
+  renderMonth();
+  updateAmountDisplay();
+  showDay();
+
+  // ===== 跨天自动刷新：设备日期变了就重新同步状态 =====
+  // 三种触发方式互补：定时器（0 点跨天）、visibilitychange（切后台久了回来）、focus（浏览器窗口重新聚焦）
+  let lastToday = todayStr();
+  function onDayChanged() {
+    const t = todayStr();
+    if (t === lastToday) return;
+    lastToday = t;
+    // 自愈：新的一天可能让昨天数据恢复合法，也可能让新日期有未来记录
+    bills.forEach(b => {
+      if (!b.date || !/^\d{4}-\d{2}-\d{2}$/.test(b.date)) {
+        if (b.ts) { const d = new Date(b.ts); b.date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+      }
+    });
+    const cleaned = bills.filter(b => b.date <= t);
+    if (cleaned.length !== bills.length) { bills = cleaned; saveBills(bills); }
+    // 同步 viewDate 到新今天，刷新所有视图
+    const today = new Date();
+    viewDate = new Date(today.getFullYear(), today.getMonth(), 1);
+    // 如果当前在看旧日期（非今天且非未来），让用户继续看；在看旧今天的自动跳到新今天
+    if (curDate !== t && curDate < t) {
+      // 用户在回看历史，保持不动（但日历和汇总必须刷新，因为月份变了）
+    } else {
+      curDate = t;
+    }
+    renderMonth();
+    renderDay();
+    updateAmountDisplay();
+  }
+  // 每 30 秒检查一次（够用且轻量）
+  setInterval(onDayChanged, 30000);
+  // 页面从后台恢复 / 窗口重新聚焦时额外检查一次（防止 30s 轮询漏掉跨天）
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) onDayChanged(); });
+  window.addEventListener('focus', onDayChanged);
+</script>
+</body>
+</html>
