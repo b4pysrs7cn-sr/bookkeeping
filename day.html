@@ -402,6 +402,11 @@
     fill: var(--ink);
     letter-spacing: 0.2px;
     font-variant-numeric: tabular-nums;
+    /* 白色描边 halo：引线从文字下方穿过时被描边分隔，杜绝线与字重合 */
+    paint-order: stroke;
+    stroke: #f4f3ef;
+    stroke-width: 3px;
+    stroke-linejoin: round;
   }
   .chart-card.detail-open .rl-line,
   .chart-card.detail-open .rl-dot,
@@ -557,6 +562,7 @@
     margin-bottom: 0;
     animation: none;
   }
+  .bill.mini .bill-actions { border-radius: 12px; }
   .bill.mini .bill-main {
     background: #fff;
     padding: 9px 10px 9px 12px;
@@ -769,12 +775,15 @@
   .bill.income  .num { color: var(--green); }
 
   /* 右侧操作层：左滑展开的编辑 / 删除 */
-  /* 操作按钮常态可见（iOS 邮件式通栏），平时被内容层盖住，随位移自然露出 */
+  /* 操作按钮常态可见（iOS 邮件式通栏），平时被内容层盖住，随位移自然露出。
+     容器带与卡片一致的圆角并裁剪按钮，露出的按钮区右缘呈现圆角，与卡片层次统一 */
   .bill-actions {
     position: absolute;
     top: 0; right: 0; bottom: 0;
     display: flex;
     z-index: 1;
+    overflow: hidden;
+    border-radius: 20px;
   }
   .bill-actions button {
     width: 84px; height: 100%;
@@ -1579,6 +1588,12 @@
   chartCardEl.addEventListener('click', e => {
     if (e.target.closest('.cl-item') || e.target.closest('.cl-detail') || e.target.closest('.bill')) return;
     chartCardEl.classList.toggle('detail-open');
+    // 收起形态时：同步收起所有分类明细与已展开的账单行，画布完全归位
+    if (!chartCardEl.classList.contains('detail-open')) {
+      document.querySelectorAll('.cl-item.open').forEach(o => o.classList.remove('open'));
+      document.querySelectorAll('#chartDetail .cl-detail.open').forEach(d => d.classList.remove('open'));
+      document.querySelectorAll('#chartDetail .bill.mini.expanded').forEach(b => b.classList.remove('expanded'));
+    }
   });
 
   // 消费构成明细：账单行的编辑 / 删除 / 点击展开（交互与日视图一致）
