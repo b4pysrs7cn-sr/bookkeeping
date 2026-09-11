@@ -388,7 +388,7 @@
   }
   .chart-card.detail-open .chart-ring {
     left: 56px;                   /* margin -150 已把盒左移150，left 直接=圆心 x=56px（112 环中心） */
-    transform: scale(0.373);      /* 300 → 112 */
+    transform: scale(0.373);      /* 300 → 112；圆环保持垂直居中（top:50% 不变） */
   }
   .chart-ring svg { width: 100%; height: 100%; display: block; overflow: visible; }
   /* 环带弧段组：柔和投影，增强浮起层次（不影响引线与文字） */
@@ -456,16 +456,16 @@
   }
 
   /* 展开态右侧面板：总金额突出在上，类别列表在下。
-     折叠时宽度收为 0（不占位，圆环保持居中），展开时平滑展开到右侧 */
+     贴合卡片上部、靠右出现，展开时平滑滑入（不再垂直居中） */
   .chart-panel {
     position: absolute;
-    top: 50%; right: 8px;
+    top: 6px; right: 8px;
     max-width: 0;
     max-height: 0;
     overflow: hidden;
     opacity: 0;
     pointer-events: none;
-    transform: translateY(-50%) translateX(26px);
+    transform: translateX(26px);
     transition: max-width 0.55s cubic-bezier(0.32, 0.72, 0, 1),
                 max-height 0.55s cubic-bezier(0.32, 0.72, 0, 1),
                 opacity 0.35s var(--ease) 0.05s,
@@ -476,7 +476,7 @@
     max-height: 400px;
     opacity: 1;
     pointer-events: auto;
-    transform: translateY(-50%) translateX(0);
+    transform: translateX(0);
   }
   /* 切月动画加速：形态收起/恢复的过渡临时压缩到 0.3s，整体节奏 ~1.2s */
   .chart-card.fast .chart-ring { transition-duration: 0.3s, 0.3s; }
