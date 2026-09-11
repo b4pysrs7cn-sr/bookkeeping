@@ -1776,24 +1776,8 @@
       chartDetailEl.querySelectorAll('.bill.mini').forEach((b, i) => {
         b.style.animationDelay = `${(i * 0.05).toFixed(2)}s`;
       });
-      scrollDetailIntoView();   // 明细展开后自动上划到可视区，免手动滚动
     }
   });
-
-  // 明细展开 → 自动滚动，让明细区整体处于可视范围。目标：明细标题贴卡片视口，被收起的柱文顶部不被压出
-  let detailScrollTimer = null;
-  function scrollDetailIntoView() {
-    clearTimeout(detailScrollTimer);
-    // 等手风琴 grid 展开首帧稳定后的下一帧再滚，避免滚动到未定型高度
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const inner = chartDetailEl.querySelector('.cl-detail-inner');
-        if (!inner) return;
-        // 明细区自身若在卡片可视高度内，也把其顶部尽量贴近可视上缘；否则上抛整卡
-        inner.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      });
-    });
-  }
 
   // 消费构成明细：账单行的编辑 / 删除 / 点击展开（交互与日视图一致）
   chartDetailEl.addEventListener('click', e => {
