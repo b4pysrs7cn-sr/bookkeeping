@@ -387,14 +387,19 @@
     transform: scale(1);          /* 折叠：居中大圆环 */
     opacity: 1;
     cursor: pointer;
-    transition: transform 0.55s cubic-bezier(0.32, 0.72, 0, 1),
-                left 0.55s cubic-bezier(0.32, 0.72, 0, 1),
-                opacity 0.3s var(--ease);
+    /* 归位（返回大圆环）：iOS 相册式回弹 —— 缩放带轻微过冲，随惯性回稳，再整体浮现 */
+    transition: transform 0.5s cubic-bezier(0.34, 1.3, 0.64, 1),
+                left 0.5s cubic-bezier(0.34, 1.3, 0.64, 1),
+                opacity 0.25s var(--ease);
   }
+  /* 展开方向：环被"拆解"进柱条，用干脆的平滑淡出，不过冲 */
   .chart-card.detail-open .chart-ring {
     left: 50%;                    /* 圆心留原位：整体淡出消失，让位柱状布局 */
     transform: scale(0.82) translateY(-12px);   /* ① 分解：轻微上浮 + 径向淡出，像被"拆解"进柱条 */
     opacity: 0;
+    transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1),
+                left 0.4s cubic-bezier(0.32, 0.72, 0, 1),
+                opacity 0.28s var(--ease);
   }
   .chart-ring svg { width: 100%; height: 100%; display: block; overflow: visible; }
   /* 环带弧段组：柔和投影，增强浮起层次（不影响引线与文字） */
@@ -563,8 +568,7 @@
   .btxt {
     flex: 1; min-width: 0;
     align-self: stretch;
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 12px;
+    display: flex; align-items: center; gap: 10px;
     padding: 9px 4px 9px 10px;
     /* ① 右文自右侧"滑入"：折叠态偏移 + 半透明，展开态回归右侧对位（延迟由 JS 按行设置） */
     opacity: 0;
@@ -577,22 +581,28 @@
     font-size: 14px; font-weight: 600; color: var(--ink);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  /* 右侧固定组：百分数 + 金额，靠右对齐；百分数为固定宽度右拉齐，跨行竖直对齐于类别文字右侧 */
+  .btxt .bmeta {
+    flex-shrink: 0;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .btxt .bpct {
+    min-width: 44px;
+    text-align: right;
+    font-size: 12px; font-weight: 700; color: var(--ink3);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .btxt .bpct.tiny { font-size: 10.5px; }
   .btxt .bnum {
     font-size: 14px; font-weight: 800; color: var(--ink);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     flex-shrink: 0;
+    text-align: right;
   }
   .btxt .bnum.small { font-size: 12px; }
   .btxt .bnum.tiny  { font-size: 10.5px; }
-  /* 类别占比：名称与金额之间的灰色小号百分数（保留一位小数） */
-  .btxt .bpct {
-    font-size: 12px; font-weight: 700; color: var(--ink3);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-  .btxt .bpct.tiny { font-size: 10.5px; }
   .chart-empty {
     padding: 6px 0 8px;
     text-align: center;
@@ -1644,8 +1654,10 @@
         <span class="bcol" title="点击返回大圆环"><span class="bcbar"><i style="--w:${w}%;background:${CAT_COLORS[c.id] || '#8E8E93'}"></i></span></span>
         <span class="btxt">
           <span class="bname">${name}</span>
-          <span class="bpct${pcls}">${pctText}</span>
-          <span class="bnum${ncls}">${numText}</span>
+          <span class="bmeta">
+            <span class="bpct${pcls}">${pctText}</span>
+            <span class="bnum${ncls}">${numText}</span>
+          </span>
         </span>
       </button>`;
     }).join('');
